@@ -1,69 +1,69 @@
-# OpenMRS Communication Module
+# OpenMRS Communicatiemodule
 
-A SaaS communication module that sends appointment notifications to patients on behalf of OpenMRS organisations, via external messaging providers.
+Een SaaS communicatiemodule die afspraaknotificaties verstuurt namens OpenMRS-organisaties, via een externe messaging provider.
 
-## Architecture
+## Architectuur
 
 ```
 OpenMRS (2.7.x+)
      |  FHIR R4 REST / webhook
      v
-CommunicationModule.Api        (ASP.NET Core Web API)
+CommunicationModule.Api          (ASP.NET Core Web API)
      |
      v
-CommunicationModule.Core       (Business logic, scheduling, interfaces)
+CommunicationModule.Core         (Domeinmodellen, interfaces, bedrijfslogica)
      |
      v
-CommunicationModule.Infrastructure  (EF Core, provider adapters, secrets)
+CommunicationModule.Infrastructure  (EF Core, provider adapter, secrets)
      |
      v
-Messaging Providers (SwiftSend / LegacyLink / AsyncFlow / SecurePost)
+Messaging Provider (bijv. SwiftSend)
      |
      v
-Patient's phone
+Telefoon van de patiënt
 ```
 
-## Projects
+## Projecten
 
-| Project | Type | Purpose |
+| Project | Type | Doel |
 |---|---|---|
-| `CommunicationModule.Api` | ASP.NET Core Web API | HTTP entry point, FHIR endpoint, receives appointments from OpenMRS |
-| `CommunicationModule.Core` | Class Library | Domain models, interfaces, business logic, scheduling |
-| `CommunicationModule.Infrastructure` | Class Library | EF Core DB access, messaging provider adapters, secrets management |
-| `CommunicationModule.Dashboard` | Blazor Web App | Real-time monitoring dashboard |
-| `CommunicationModule.Tests` | xUnit | Unit and integration tests |
+| `CommunicationModule.Api` | ASP.NET Core Web API | HTTP-toegangspunt, FHIR-endpoint, ontvangt afspraken van OpenMRS |
+| `CommunicationModule.Core` | Class Library | Domeinmodellen, interfaces, bedrijfslogica, planning |
+| `CommunicationModule.Infrastructure` | Class Library | EF Core databasetoegang, messaging provider adapter, secretbeheer |
+| `CommunicationModule.Dashboard` | Blazor Web App | Real-time monitoringsdashboard |
+| `CommunicationModule.Tests` | xUnit | Unit- en integratietests |
 
-## Getting Started
+## Aan de slag
 
-### Prerequisites
+### Vereisten
 - .NET 9 SDK
-- SQL Server (or SQL Server LocalDB for development)
+- SQL Server (of SQL Server LocalDB voor ontwikkeling)
 
-### Run the API
+### API starten
 ```bash
 dotnet run --project src/CommunicationModule.Api
 ```
 
-### Run the Dashboard
+### Dashboard starten
 ```bash
 dotnet run --project src/CommunicationModule.Dashboard
 ```
 
-### Run Tests
+### Tests uitvoeren
 ```bash
 dotnet test
 ```
 
-## Key Technologies
+## Belangrijkste technologieën
 - **ASP.NET Core 9** — Web API
 - **Entity Framework Core 9** — Database ORM
-- **Hangfire** — Background job scheduling (notifications at T-24h / T-1h)
-- **HL7 FHIR R4** — Appointment data standard
-- **OpenTelemetry** — Distributed tracing and metrics
+- **Hangfire** — Achtergrondtaken voor notificatieplanning (T-24u / T-1u)
+- **HL7 FHIR R4** — Standaard voor afspraakgegevens
+- **OpenTelemetry** — Gedistribueerde tracing en metrics
 - **Blazor** — Dashboard frontend
 
-## Security
-- AES-256 encryption at rest
-- TLS 1.3 in transit
-- Credentials stored in environment variables / Azure Key Vault — never in code or config files
-- No PII in log files
+## Beveiliging
+- AES-256 versleuteling voor opslag
+- TLS 1.3 voor transport
+- Inloggegevens worden opgeslagen via omgevingsvariabelen of Azure Key Vault — nooit in code of configuratiebestanden
+- Geen persoonsgegevens (PII) in logbestanden
