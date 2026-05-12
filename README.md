@@ -33,7 +33,7 @@ Telefoon van de patiënt
 | `CommunicationModule.Dashboard` | Blazor Web App | Real-time monitoringsdashboard |
 | `CommunicationModule.Tests` | xUnit | Unit- en integratietests |
 
-## Aan de slag
+## Om te starten
 
 ### Vereisten
 - .NET 9 SDK
