@@ -1,8 +1,18 @@
+using CommunicationModule.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Configuration.AddUserSecrets<Program>(optional: true);
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+var conn = DatabaseConnectionResolver.ResolveConnectionString(builder.Configuration);
+var serverVersion = DatabaseConnectionResolver.GetServerVersion();
+builder.Services.AddDbContext<CommunicationDbContext>(opts =>
+    opts.UseMySql(conn, serverVersion, mySqlOptions =>
+        mySqlOptions.MigrationsHistoryTable("__efmigrationshistory")));
 
 var app = builder.Build();
 
@@ -18,6 +28,18 @@ var summaries = new[]
 {
     "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
 };
+
+app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken cancellationToken) =>
+{
+    var canConnect = await db.Database.CanConnectAsync(cancellationToken);
+    var pendingMigrations = await db.Database.GetPendingMigrationsAsync(cancellationToken);
+
+    return Results.Ok(new
+    {
+        canConnect,
+        pendingMigrations = pendingMigrations.ToArray()
+    });
+});
 
 app.MapGet("/weatherforecast", () =>
 {
