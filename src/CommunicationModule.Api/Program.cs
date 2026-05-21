@@ -1,5 +1,9 @@
+using CommunicationModule.Api.Endpoints;
+using CommunicationModule.Api.Services;
 using CommunicationModule.Infrastructure.Data;
 using CommunicationModule.Infrastructure.Services;
+using Hangfire;
+using Hangfire.InMemory;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,10 +16,14 @@ if (string.IsNullOrWhiteSpace(encryptionKey))
     throw new InvalidOperationException("Missing required user secret 'Crypto:Key'.");
 }
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton(new AesEncryptionService(encryptionKey));
+
+builder.Services.AddHangfire(config => config.UseInMemoryStorage());
+builder.Services.AddHangfireServer();
+builder.Services.AddScoped<AppointmentIngestionService>();
+builder.Services.AddScoped<NotificationDispatchService>();
+
 var conn = DatabaseConnectionResolver.ResolveConnectionString(builder.Configuration);
 var serverVersion = DatabaseConnectionResolver.GetServerVersion();
 builder.Services.AddDbContext<CommunicationDbContext>(opts =>
@@ -24,18 +32,12 @@ builder.Services.AddDbContext<CommunicationDbContext>(opts =>
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
 app.UseHttpsRedirection();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
 
 app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken cancellationToken) =>
 {
@@ -46,11 +48,7 @@ app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken canc
             ? await db.Database.GetPendingMigrationsAsync(cancellationToken)
             : Array.Empty<string>();
 
-        return Results.Ok(new
-        {
-            canConnect,
-            pendingMigrations = pendingMigrations.ToArray()
-        });
+        return Results.Ok(new { canConnect, pendingMigrations = pendingMigrations.ToArray() });
     }
     catch (Exception ex)
     {
@@ -61,23 +59,11 @@ app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken canc
     }
 });
 
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+app.MapDashboardEndpoints();
+app.MapOrganisationEndpoints();
+app.MapFhirEndpoints();
+
+if (app.Environment.IsDevelopment())
+    app.UseHangfireDashboard("/hangfire");
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
