@@ -1,0 +1,156 @@
+@page "/logs"
+@rendermode InteractiveServer
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Message Logs</PageTitle>
+
+<h1>Message Logs</h1>
+
+<div class="filter-bar">
+    <select class="form-select form-select-sm" style="width:auto;" @onchange="OnSuccessFilterChanged">
+        <option value="">All statuses</option>
+        <option value="true">Sent</option>
+        <option value="false">Failed</option>
+    </select>
+    <input class="form-control form-control-sm" style="width:180px;" placeholder="Filter by provider"
+           @bind="providerFilter" @bind:event="oninput" @onkeydown="OnProviderKeyDown" />
+    <button class="btn btn-primary btn-sm" @onclick="ApplyFilter">Search</button>
+    @if (result != null)
+    {
+        <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">@result.Total result@(result.Total == 1 ? "" : "s")</span>
+    }
+</div>
+
+@if (loading)
+{
+    <p class="text-secondary">Loading...</p>
+}
+else if (error != null)
+{
+    <div class="alert alert-danger">@error</div>
+}
+else if (result != null)
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Provider</th>
+                <th>Organisation</th>
+                <th>Status</th>
+                <th>Error</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (result.Items.Count == 0)
+            {
+                <tr><td colspan="5" class="text-center text-secondary py-4">No results found.</td></tr>
+            }
+            else
+            {
+                @foreach (var log in result.Items)
+                {
+                    <tr>
+                        <td style="white-space:nowrap; color:#64748b;">@log.LoggedAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</td>
+                        <td><span class="badge text-bg-secondary">@log.ProviderName</span></td>
+                        <td style="color:#94a3b8; font-size:0.8rem; font-family:monospace;">@log.OrganisationId.ToString()[..8]&hellip;</td>
+                        <td>
+                            @if (log.Success)
+                            {
+                                <span class="badge text-bg-success">Sent</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-danger">Failed</span>
+                            }
+                        </td>
+                        <td style="color:#dc2626; font-size:0.85rem;">@(log.ErrorMessage ?? "—")</td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+
+    <nav aria-label="Log pagination">
+        <ul class="pagination pagination-sm">
+            <li class="page-item @(currentPage <= 1 ? "disabled" : "")">
+                <button class="page-link" @onclick="PrevPage">&#8592; Prev</button>
+            </li>
+            <li class="page-item disabled">
+                <span class="page-link" style="color:#64748b;">@currentPage / @TotalPages</span>
+            </li>
+            <li class="page-item @(currentPage >= TotalPages ? "disabled" : "")">
+                <button class="page-link" @onclick="NextPage">Next &#8594;</button>
+            </li>
+        </ul>
+    </nav>
+}
+
+@code {
+    private PagedResult<MessageLogItem>? result;
+    private bool loading = true;
+    private string? error;
+    private int currentPage = 1;
+    private const int PageSize = 20;
+    private bool? successFilter = null;
+    private string providerFilter = string.Empty;
+
+    private int TotalPages => result == null ? 1 : (int)Math.Ceiling(result.Total / (double)PageSize);
+
+    protected override async Task OnInitializedAsync() => await LoadLogs();
+
+    private async Task ApplyFilter()
+    {
+        currentPage = 1;
+        await LoadLogs();
+    }
+
+    private async Task LoadLogs()
+    {
+        loading = true;
+        error = null;
+        try
+        {
+            var http = HttpClientFactory.CreateClient("ApiClient");
+            var url = $"/api/dashboard/logs?page={currentPage}&pageSize={PageSize}";
+            if (successFilter.HasValue) url += $"&success={successFilter.Value}";
+            if (!string.IsNullOrEmpty(providerFilter)) url += $"&provider={Uri.EscapeDataString(providerFilter)}";
+            result = await http.GetFromJsonAsync<PagedResult<MessageLogItem>>(url);
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not reach the API: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task OnSuccessFilterChanged(ChangeEventArgs e)
+    {
+        successFilter = e.Value?.ToString() switch
+        {
+            "true" => true,
+            "false" => false,
+            _ => null
+        };
+        currentPage = 1;
+        await LoadLogs();
+    }
+
+    private async Task OnProviderKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ApplyFilter();
+    }
+
+    private async Task PrevPage()
+    {
+        if (currentPage > 1) { currentPage--; await LoadLogs(); }
+    }
+
+    private async Task NextPage()
+    {
+        if (currentPage < TotalPages) { currentPage++; await LoadLogs(); }
+    }
+}
