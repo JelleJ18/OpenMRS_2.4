@@ -1,0 +1,101 @@
+@page "/organisations"
+@rendermode InteractiveServer
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Organisations</PageTitle>
+
+<h1>Organisations</h1>
+
+@if (loading)
+{
+    <p class="text-secondary">Loading...</p>
+}
+else if (error != null)
+{
+    <div class="alert alert-danger">@error</div>
+}
+else if (organisations != null)
+{
+    @if (organisations.Count == 0)
+    {
+        <p class="text-secondary" style="font-size:0.875rem;">No organisations found.</p>
+    }
+    else
+    {
+        <p style="font-size:0.85rem; color:#64748b; margin-bottom:1.25rem;">
+            @organisations.Count organisation@(organisations.Count == 1 ? "" : "s") registered.
+        </p>
+
+        @foreach (var org in organisations)
+        {
+            <div class="card mb-3">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <span>@org.Name</span>
+                    <span style="font-size:0.75rem; color:#94a3b8; font-weight:400;">
+                        @org.Providers.Count provider@(org.Providers.Count == 1 ? "" : "s")
+                    </span>
+                </div>
+                <div class="card-body p-0">
+                    @if (org.Providers.Count == 0)
+                    {
+                        <p class="text-secondary p-3 mb-0" style="font-size:0.875rem;">No provider subscriptions.</p>
+                    }
+                    else
+                    {
+                        <table class="table mb-0" style="border-radius:0; border:none; box-shadow:none;">
+                            <thead>
+                                <tr>
+                                    <th>Provider</th>
+                                    <th>Status</th>
+                                    <th>Active since</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var provider in org.Providers)
+                                {
+                                    <tr>
+                                        <td style="font-weight:500;">@provider.ProviderName</td>
+                                        <td>
+                                            @if (provider.IsActive)
+                                            {
+                                                <span class="badge text-bg-success">Active</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="badge text-bg-secondary">Inactive</span>
+                                            }
+                                        </td>
+                                        <td style="color:#64748b;">@provider.CreatedAt.ToLocalTime().ToString("dd-MM-yyyy")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </div>
+        }
+    }
+}
+
+@code {
+    private List<OrganisationItem>? organisations;
+    private bool loading = true;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var http = HttpClientFactory.CreateClient("ApiClient");
+            organisations = await http.GetFromJsonAsync<List<OrganisationItem>>("/api/organisations");
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not reach the API: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}

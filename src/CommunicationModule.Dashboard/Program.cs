@@ -2,9 +2,14 @@ using CommunicationModule.Dashboard.Components;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+
+var apiBaseUrl = builder.Configuration["ApiBaseUrl"] ?? "http://localhost:5079";
+builder.Services.AddHttpClient("ApiClient", client =>
+{
+    client.BaseAddress = new Uri(apiBaseUrl);
+});
 
 var app = builder.Build();
 
