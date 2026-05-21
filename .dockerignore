@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.idea/
+**/*.user
+**/*.suo
+**/*.swp
+.git/
+.github/
+tests/
+README.md
+IMPLEMENTATION_PLAN.md
