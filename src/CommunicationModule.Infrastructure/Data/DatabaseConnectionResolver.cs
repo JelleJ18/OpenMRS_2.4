@@ -21,30 +21,10 @@ public static class DatabaseConnectionResolver
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new InvalidOperationException(
-                $"Missing connection string '{connectionName}'. Set Database:Profile to '{LocalProfile}' or '{ProductionProfile}' and configure the matching connection string.");
+                $"Missing connection string '{connectionName}'. Store it in user secrets or an external secret source and set Database:Profile to '{LocalProfile}' or '{ProductionProfile}'.");
         }
 
         return connectionString;
-    }
-
-    public static string ResolveConnectionStringFromEnvironment()
-    {
-        var profile = Environment.GetEnvironmentVariable("Database__Profile") ?? LocalProfile;
-        var connectionName = IsProduction(profile) ? ProductionConnectionName : LocalConnectionName;
-
-        var connectionString = Environment.GetEnvironmentVariable($"ConnectionStrings__{connectionName}");
-        if (!string.IsNullOrWhiteSpace(connectionString))
-        {
-            return connectionString;
-        }
-
-        if (IsProduction(profile))
-        {
-            throw new InvalidOperationException(
-                $"Missing environment variable ConnectionStrings__{ProductionConnectionName}. Configure the production database connection before running migrations or the app.");
-        }
-
-        return "Server=localhost;Port=3306;Database=communication;User=root;Password=root;";
     }
 
     public static MySqlServerVersion GetServerVersion() => new(new Version(8, 0, 36));
