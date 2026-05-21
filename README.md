@@ -37,7 +37,8 @@ Telefoon van de patiënt
 
 ### Vereisten
 - .NET 9 SDK
-- SQL Server (of SQL Server LocalDB voor ontwikkeling)
+- Docker Desktop
+- Toegang tot de AWS MySQL/RDS database
 
 ### API starten
 ```bash
@@ -53,6 +54,20 @@ dotnet run --project src/CommunicationModule.Dashboard
 ```bash
 dotnet test
 ```
+
+### Met Docker draaien
+Kopieer `.env.example` naar `.env` en vul de productie-connection string in.
+
+```bash
+docker compose up --build
+```
+
+Daarna draait de API op `http://localhost:5079` en de dashboard op `http://localhost:5080`.
+
+### CI/CD
+- CI: `.github/workflows/ci.yml` bouwt en test bij pull requests en pushes naar `main`.
+- CD: `.github/workflows/publish-images.yml` bouwt en publiceert Docker-images naar GHCR.
+- Runtime secrets komen uit GitHub Secrets of je deployment environment, niet uit `appsettings.json`.
 
 ## Belangrijkste technologieën
 - **ASP.NET Core 9** — Web API
