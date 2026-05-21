@@ -1,3 +1,4 @@
+using CommunicationModule.Api.Endpoints;
 using CommunicationModule.Infrastructure.Data;
 using CommunicationModule.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -74,6 +75,9 @@ app.MapGet("/weatherforecast", () =>
     return forecast;
 })
 .WithName("GetWeatherForecast");
+
+app.MapDashboardEndpoints();
+app.MapOrganisationEndpoints();
 
 app.Run();
 
