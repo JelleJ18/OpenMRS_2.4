@@ -1,13 +1,21 @@
 using CommunicationModule.Infrastructure.Data;
+using CommunicationModule.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration.AddUserSecrets<Program>(optional: true);
 
+var encryptionKey = builder.Configuration["Crypto:Key"];
+if (string.IsNullOrWhiteSpace(encryptionKey))
+{
+    throw new InvalidOperationException("Missing required user secret 'Crypto:Key'.");
+}
+
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services.AddSingleton(new AesEncryptionService(encryptionKey));
 var conn = DatabaseConnectionResolver.ResolveConnectionString(builder.Configuration);
 var serverVersion = DatabaseConnectionResolver.GetServerVersion();
 builder.Services.AddDbContext<CommunicationDbContext>(opts =>
