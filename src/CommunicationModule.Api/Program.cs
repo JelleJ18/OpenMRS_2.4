@@ -31,14 +31,26 @@ var summaries = new[]
 
 app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken cancellationToken) =>
 {
-    var canConnect = await db.Database.CanConnectAsync(cancellationToken);
-    var pendingMigrations = await db.Database.GetPendingMigrationsAsync(cancellationToken);
-
-    return Results.Ok(new
+    try
     {
-        canConnect,
-        pendingMigrations = pendingMigrations.ToArray()
-    });
+        var canConnect = await db.Database.CanConnectAsync(cancellationToken);
+        var pendingMigrations = canConnect
+            ? await db.Database.GetPendingMigrationsAsync(cancellationToken)
+            : Array.Empty<string>();
+
+        return Results.Ok(new
+        {
+            canConnect,
+            pendingMigrations = pendingMigrations.ToArray()
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Database check failed",
+            detail: ex.Message,
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 });
 
 app.MapGet("/weatherforecast", () =>
