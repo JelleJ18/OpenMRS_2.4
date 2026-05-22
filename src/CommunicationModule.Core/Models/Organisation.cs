@@ -6,4 +6,5 @@ public class Organisation
     public string Name { get; set; } = string.Empty;
 
     public ICollection<ProviderSubscription> ProviderSubscriptions { get; set; } = [];
+    public ICollection<OpenMRSInstance> OpenMRSInstances { get; set; } = [];
 }
