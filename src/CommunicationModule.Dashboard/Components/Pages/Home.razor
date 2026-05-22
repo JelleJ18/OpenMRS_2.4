@@ -1,7 +1,91 @@
-﻿@page "/"
+@page "/"
+@rendermode InteractiveServer
+@inject IHttpClientFactory HttpClientFactory
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Overview</PageTitle>
 
-<h1>Hello, world!</h1>
+<h1>Overview</h1>
 
-Welcome to your new app.
+@if (loading)
+{
+    <p class="text-secondary">Loading...</p>
+}
+else if (error != null)
+{
+    <div class="alert alert-danger">@error</div>
+}
+else if (stats != null)
+{
+    <div class="row g-3 mb-4">
+        <div class="col-sm-4">
+            <div class="stat-card green">
+                <div class="stat-label">Sent today</div>
+                <div class="stat-value">@stats.TotalSentToday</div>
+            </div>
+        </div>
+        <div class="col-sm-4">
+            <div class="stat-card red">
+                <div class="stat-label">Failed today</div>
+                <div class="stat-value">@stats.TotalFailedToday</div>
+            </div>
+        </div>
+        <div class="col-sm-4">
+            <div class="stat-card amber">
+                <div class="stat-label">Pending jobs</div>
+                <div class="stat-value">@stats.TotalPendingJobs</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section-title">Recent errors</div>
+
+    @if (stats.RecentErrors.Count == 0)
+    {
+        <p class="text-secondary" style="font-size:0.875rem;">No recent errors — all good.</p>
+    }
+    else
+    {
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Provider</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var e in stats.RecentErrors)
+                {
+                    <tr>
+                        <td style="white-space:nowrap; color:#64748b;">@e.LoggedAt.ToLocalTime().ToString("dd-MM HH:mm")</td>
+                        <td><span class="badge text-bg-secondary">@e.ProviderName</span></td>
+                        <td style="color:#dc2626;">@(e.ErrorMessage ?? "—")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private DashboardStats? stats;
+    private bool loading = true;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var http = HttpClientFactory.CreateClient("ApiClient");
+            stats = await http.GetFromJsonAsync<DashboardStats>("/api/dashboard/stats");
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not reach the API: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+}
