@@ -8,6 +8,10 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddScoped<DataRetentionService>();
+
+builder.Services.AddHostedService<DataRetentionBackgroundService>();
+
 builder.Configuration.AddUserSecrets<Program>(optional: true);
 
 var encryptionKey = builder.Configuration["Crypto:Key"];
@@ -24,6 +28,7 @@ builder.Services.AddHangfire(config => config.UseInMemoryStorage());
 builder.Services.AddHangfireServer();
 builder.Services.AddScoped<AppointmentIngestionService>();
 builder.Services.AddScoped<NotificationDispatchService>();
+
 builder.Services.AddScoped<CommunicationModule.Core.Interfaces.IEventPublisher, CommunicationModule.Infrastructure.Services.EventPublisher>();
 
 var conn = DatabaseConnectionResolver.ResolveConnectionString(builder.Configuration);
@@ -33,6 +38,7 @@ builder.Services.AddDbContext<CommunicationDbContext>(opts =>
         mySqlOptions.MigrationsHistoryTable("__efmigrationshistory")));
 
 var app = builder.Build();
+
 
 if (app.Environment.IsDevelopment())
 {
