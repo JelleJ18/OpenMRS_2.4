@@ -1,0 +1,138 @@
+{
+  "uid": "communication-module-overview",
+  "title": "Communication Module Overview",
+  "tags": ["openmrs", "communication-module", "telemetry"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 3,
+  "refresh": "30s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "style": "dark",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "HL7 received total",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "communicationmodule_hl7_received_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "stat",
+      "title": "Appointments ingested total",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "communicationmodule_appointments_ingested_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "stat",
+      "title": "Notification sent total",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "communicationmodule_notification_jobs_sent_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "stat",
+      "title": "API health",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "avg(up{job=\"business\"})", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "stat",
+      "title": "HL7 failures total",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "communicationmodule_hl7_failed_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "stat",
+      "title": "Notification failed total",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "communicationmodule_notification_jobs_failed_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "stat",
+      "title": "Notification skipped total",
+      "gridPos": { "x": 0, "y": 4, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "communicationmodule_notification_jobs_skipped_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "timeseries",
+      "title": "HL7 throughput and errors",
+      "gridPos": { "x": 4, "y": 4, "w": 10, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(communicationmodule_hl7_received_total[15m])", "legendFormat": "Received/15m", "refId": "A" },
+        { "expr": "increase(communicationmodule_hl7_failed_total[15m])", "legendFormat": "Failed/15m", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Processing latency",
+      "gridPos": { "x": 14, "y": 4, "w": 10, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "communicationmodule_hl7_parse_duration_seconds_avg", "legendFormat": "avg parse", "refId": "A" },
+        { "expr": "communicationmodule_hl7_mapping_duration_seconds_avg", "legendFormat": "avg mapping", "refId": "B" },
+        { "expr": "communicationmodule_appointment_ingest_duration_seconds_avg", "legendFormat": "avg ingest", "refId": "C" },
+        { "expr": "communicationmodule_notification_dispatch_duration_seconds_avg", "legendFormat": "avg dispatch", "refId": "D" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Notification outcomes",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "increase(communicationmodule_notification_jobs_sent_total[15m])", "legendFormat": "Sent/15m", "refId": "A" },
+        { "expr": "increase(communicationmodule_notification_jobs_failed_total[15m])", "legendFormat": "Failed/15m", "refId": "B" },
+        { "expr": "increase(communicationmodule_notification_jobs_skipped_total[15m])", "legendFormat": "Skipped/15m", "refId": "C" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single", "sort": "none" } }
+    }
+  ],
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "links": [],
+  "timepicker": {},
+  "timezone": "utc"
+}

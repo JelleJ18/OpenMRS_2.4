@@ -1,5 +1,6 @@
 namespace CommunicationModule.Api.Endpoints;
 using CommunicationModule.Api.Services;
+using System.Diagnostics;
 
 public static class Hl7Endpoints
 {
@@ -18,11 +19,22 @@ public static class Hl7Endpoints
             if (string.IsNullOrWhiteSpace(hl7))
                 return Results.BadRequest("Empty HL7 message");
 
+            Telemetry.Hl7MessagesReceived.Add(1);
+            BusinessMetrics.IncrementHl7Received();
+
             // Parse HL7
+            var parseStart = Stopwatch.GetTimestamp();
             var parsed = Hl7Parser.Parse(hl7);
+            var parseDuration = Stopwatch.GetElapsedTime(parseStart).TotalSeconds;
+            Telemetry.Hl7ParseDuration.Record(parseDuration);
+            BusinessMetrics.RecordHl7ParseDuration(parseDuration);
 
             // Map naar FHIR (jouw bestaande flow)
+            var mappingStart = Stopwatch.GetTimestamp();
             var fhirJson = Hl7ToFhirMapper.MapToAppointment(parsed);
+            var mappingDuration = Stopwatch.GetElapsedTime(mappingStart).TotalSeconds;
+            Telemetry.Hl7MappingDuration.Record(mappingDuration);
+            BusinessMetrics.RecordHl7MappingDuration(mappingDuration);
 
             // Gebruik jouw bestaande ingestie + ACK flow
             var result = await ingestion.IngestAsync(
