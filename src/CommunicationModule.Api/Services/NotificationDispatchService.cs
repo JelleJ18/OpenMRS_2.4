@@ -12,6 +12,7 @@ using CommunicationModule.Infrastructure.Data;
 using CommunicationModule.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 
 namespace CommunicationModule.Api.Services;
 
@@ -39,6 +40,7 @@ public class NotificationDispatchService
 
     public async Task DispatchAsync(Guid notificationJobId, CancellationToken ct)
     {
+        var dispatchStart = Stopwatch.GetTimestamp();
         var job = await _db.NotificationJobs
             .Include(j => j.Appointment)
             .FirstOrDefaultAsync(j => j.Id == notificationJobId, ct);
@@ -46,6 +48,11 @@ public class NotificationDispatchService
         if (job is null)
         {
             _logger.LogWarning("NotificationJob {Id} not found.", notificationJobId);
+            Telemetry.NotificationJobsFailed.Add(1);
+            BusinessMetrics.IncrementNotificationJobsFailed();
+            var missingJobDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(missingJobDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(missingJobDispatchDuration);
             return;
         }
 
@@ -58,6 +65,11 @@ public class NotificationDispatchService
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, old, job.Status, DateTime.UtcNow, "Appointment already started"), ct);
             _logger.LogInformation("Job {Id} skipped — appointment already started.", notificationJobId);
+            Telemetry.NotificationJobsSkipped.Add(1);
+            BusinessMetrics.IncrementNotificationJobsSkipped();
+            var skippedDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(skippedDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(skippedDispatchDuration);
             return;
         }
 
@@ -75,6 +87,11 @@ public class NotificationDispatchService
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, old, job.Status, DateTime.UtcNow, "No provider configured"), ct);
             _logger.LogWarning("Job {Id} failed — organisation {OrganisationId} has no provider configured.", notificationJobId, job.Appointment.OrganisationId);
+            Telemetry.NotificationJobsFailed.Add(1);
+            BusinessMetrics.IncrementNotificationJobsFailed();
+            var unconfiguredDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(unconfiguredDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(unconfiguredDispatchDuration);
             return;
         }
 
@@ -86,6 +103,11 @@ public class NotificationDispatchService
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, old, job.Status, DateTime.UtcNow, "Provider inactive"), ct);
             _logger.LogWarning("Job {Id} failed — provider {ProviderName} is inactive for organisation {OrganisationId}.", notificationJobId, providerSubscription.ProviderName, job.Appointment.OrganisationId);
+            Telemetry.NotificationJobsFailed.Add(1);
+            BusinessMetrics.IncrementNotificationJobsFailed();
+            var inactiveProviderDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(inactiveProviderDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(inactiveProviderDispatchDuration);
             return;
         }
 
@@ -98,6 +120,11 @@ public class NotificationDispatchService
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, old, job.Status, DateTime.UtcNow, "No provider implementation"), ct);
             _logger.LogError("Job {Id} failed — provider implementation {ProviderName} is not registered.", notificationJobId, providerSubscription.ProviderName);
+            Telemetry.NotificationJobsFailed.Add(1);
+            BusinessMetrics.IncrementNotificationJobsFailed();
+            var missingProviderDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(missingProviderDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(missingProviderDispatchDuration);
             return;
         }
 
@@ -114,6 +141,11 @@ public class NotificationDispatchService
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, old, job.Status, DateTime.UtcNow, "Decrypt failure"), ct);
             _logger.LogError(ex, "Job {Id} failed — could not decrypt patient phone.", notificationJobId);
+            Telemetry.NotificationJobsFailed.Add(1);
+            BusinessMetrics.IncrementNotificationJobsFailed();
+            var decryptFailureDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(decryptFailureDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(decryptFailureDispatchDuration);
             return;
         }
 
@@ -138,6 +170,11 @@ public class NotificationDispatchService
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, old, job.Status, DateTime.UtcNow, ex.Message), ct);
             _logger.LogError(ex, "Job {Id} failed while sending through provider {ProviderName}.", notificationJobId, providerSubscription.ProviderName);
+            Telemetry.NotificationJobsFailed.Add(1);
+            BusinessMetrics.IncrementNotificationJobsFailed();
+            var sendExceptionDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(sendExceptionDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(sendExceptionDispatchDuration);
             return;
         }
 
@@ -150,6 +187,11 @@ public class NotificationDispatchService
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, old, job.Status, DateTime.UtcNow, result.ErrorMessage), ct);
             _logger.LogWarning("Job {Id} failed through provider {ProviderName}: {ErrorMessage}", notificationJobId, providerSubscription.ProviderName, result.ErrorMessage);
+            Telemetry.NotificationJobsFailed.Add(1);
+            BusinessMetrics.IncrementNotificationJobsFailed();
+            var providerFailureDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+            Telemetry.NotificationDispatchDuration.Record(providerFailureDispatchDuration);
+            BusinessMetrics.RecordNotificationDispatchDuration(providerFailureDispatchDuration);
             return;
         }
 
@@ -161,6 +203,11 @@ public class NotificationDispatchService
         await _events.PublishAsync(new NotificationJobStatusChangedEvent(job.Id, job.AppointmentId, job.Appointment.OrganisationId, previous, job.Status, DateTime.UtcNow, null), ct);
 
         _logger.LogInformation("Job {Id} sent for appointment {AppointmentId} using provider {ProviderName}.", notificationJobId, job.AppointmentId, providerSubscription.ProviderName);
+        Telemetry.NotificationJobsSent.Add(1);
+        BusinessMetrics.IncrementNotificationJobsSent();
+        var sentDispatchDuration = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+        Telemetry.NotificationDispatchDuration.Record(sentDispatchDuration);
+        BusinessMetrics.RecordNotificationDispatchDuration(sentDispatchDuration);
     }
 
     private static string BuildMessage(NotificationJob job)

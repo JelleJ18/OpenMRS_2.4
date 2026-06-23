@@ -6,6 +6,7 @@ using Hangfire;
 using Hl7.Fhir.Model;
 using Hl7.Fhir.Serialization;
 using Microsoft.EntityFrameworkCore;
+using System.Diagnostics;
 
 namespace CommunicationModule.Api.Services;
 
@@ -33,6 +34,7 @@ public class AppointmentIngestionService
         Guid organisationId,
         CancellationToken ct)
     {
+        var ingestStart = Stopwatch.GetTimestamp();
         Hl7.Fhir.Model.Appointment fhir;
         try
         {
@@ -41,16 +43,35 @@ public class AppointmentIngestionService
         }
         catch (Exception ex)
         {
+            Telemetry.Hl7MessagesFailed.Add(1);
+            BusinessMetrics.IncrementHl7Failed();
+            var invalidFhirIngestDuration = Stopwatch.GetElapsedTime(ingestStart).TotalSeconds;
+            Telemetry.AppointmentIngestDuration.Record(invalidFhirIngestDuration);
+            BusinessMetrics.RecordAppointmentIngestDuration(invalidFhirIngestDuration);
             return IngestionResult.Fail($"Invalid FHIR Appointment: {ex.Message}");
         }
 
         var validationError = ValidateAppointment(fhir);
         if (validationError is not null)
+        {
+            Telemetry.Hl7MessagesFailed.Add(1);
+            BusinessMetrics.IncrementHl7Failed();
+            var validationFailureIngestDuration = Stopwatch.GetElapsedTime(ingestStart).TotalSeconds;
+            Telemetry.AppointmentIngestDuration.Record(validationFailureIngestDuration);
+            BusinessMetrics.RecordAppointmentIngestDuration(validationFailureIngestDuration);
             return IngestionResult.Fail(validationError);
+        }
 
         var start = fhir.Start;
         if (start is null)
+        {
+            Telemetry.Hl7MessagesFailed.Add(1);
+            BusinessMetrics.IncrementHl7Failed();
+            var missingStartIngestDuration = Stopwatch.GetElapsedTime(ingestStart).TotalSeconds;
+            Telemetry.AppointmentIngestDuration.Record(missingStartIngestDuration);
+            BusinessMetrics.RecordAppointmentIngestDuration(missingStartIngestDuration);
             return IngestionResult.Fail("Appointment.start is required.");
+        }
 
         var appointmentTime = start.Value.UtcDateTime;
         var status = MapStatus(fhir.Status);
@@ -59,7 +80,14 @@ public class AppointmentIngestionService
         var appointmentId = fhir.Id ?? string.Empty;
 
         if (string.IsNullOrEmpty(patientPhone))
+        {
+            Telemetry.Hl7MessagesFailed.Add(1);
+            BusinessMetrics.IncrementHl7Failed();
+            var missingPhoneIngestDuration = Stopwatch.GetElapsedTime(ingestStart).TotalSeconds;
+            Telemetry.AppointmentIngestDuration.Record(missingPhoneIngestDuration);
+            BusinessMetrics.RecordAppointmentIngestDuration(missingPhoneIngestDuration);
             return IngestionResult.Fail("Patient.telecom must contain a phone number.");
+        }
 
         var encryptedPhone = _encryption.Encrypt(patientPhone);
 
@@ -91,6 +119,11 @@ public class AppointmentIngestionService
         {
             await _db.SaveChangesAsync(ct);
             await _events.PublishAsync(new CommunicationModule.Core.Events.AppointmentReceivedEvent(appointment.Id, organisationId, appointmentTime, location), ct);
+            Telemetry.AppointmentsIngested.Add(1);
+            BusinessMetrics.IncrementAppointmentsIngested();
+            var rescheduleIngestDuration = Stopwatch.GetElapsedTime(ingestStart).TotalSeconds;
+            Telemetry.AppointmentIngestDuration.Record(rescheduleIngestDuration);
+            BusinessMetrics.RecordAppointmentIngestDuration(rescheduleIngestDuration);
             return IngestionResult.Ok(appointment.Id, scheduled: false);
         }
 
@@ -113,6 +146,7 @@ public class AppointmentIngestionService
                 _jobs.Schedule<NotificationDispatchService>(
                     s => s.DispatchAsync(job24.Id, CancellationToken.None),
                     t24 - now);
+                Telemetry.NotificationJobsScheduled.Add(1);
             }
 
             if (t1 > now)
@@ -128,11 +162,17 @@ public class AppointmentIngestionService
                 _jobs.Schedule<NotificationDispatchService>(
                     s => s.DispatchAsync(job1.Id, CancellationToken.None),
                     t1 - now);
+                Telemetry.NotificationJobsScheduled.Add(1);
             }
         }
 
         await _db.SaveChangesAsync(ct);
         await _events.PublishAsync(new CommunicationModule.Core.Events.AppointmentReceivedEvent(appointment.Id, organisationId, appointmentTime, location), ct);
+        Telemetry.AppointmentsIngested.Add(1);
+        BusinessMetrics.IncrementAppointmentsIngested();
+        var completedIngestDuration = Stopwatch.GetElapsedTime(ingestStart).TotalSeconds;
+        Telemetry.AppointmentIngestDuration.Record(completedIngestDuration);
+        BusinessMetrics.RecordAppointmentIngestDuration(completedIngestDuration);
         return IngestionResult.Ok(appointment.Id, scheduled: isNew);
     }
 

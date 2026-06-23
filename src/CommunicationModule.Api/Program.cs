@@ -4,6 +4,7 @@ using CommunicationModule.Infrastructure.Data;
 using CommunicationModule.Infrastructure.Services;
 using Hangfire;
 using Hangfire.InMemory;
+using OpenTelemetry.Metrics;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,14 @@ if (string.IsNullOrWhiteSpace(encryptionKey))
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton(new AesEncryptionService(encryptionKey));
 builder.Services.AddSingleton<TenantAccessService>();
+
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics.AddMeter(Telemetry.MeterName);
+        metrics.AddAspNetCoreInstrumentation();
+        metrics.AddPrometheusExporter();
+    });
 
 builder.Services.AddHangfire(config => config.UseInMemoryStorage());
 builder.Services.AddHangfireServer();
@@ -85,6 +94,8 @@ app.MapOrganisationEndpoints();
 app.MapOpenMRSInstanceEndpoints();
 app.MapFhirEndpoints();
 app.MapHl7Endpoints();
+app.MapGet("/metrics/business", () => Results.Text(BusinessMetrics.GetPrometheusText(), "text/plain; version=0.0.4; charset=utf-8"));
+app.MapPrometheusScrapingEndpoint();
 
 if (app.Environment.IsDevelopment())
 {
