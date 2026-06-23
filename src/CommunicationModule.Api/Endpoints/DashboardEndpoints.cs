@@ -12,10 +12,7 @@ public static class DashboardEndpoints
 
         group.MapGet("/stats", async (HttpRequest request, CommunicationDbContext db, CancellationToken ct) =>
         {
-            if (!TryGetOrganisationId(request, out var organisationId))
-            {
-                return Results.BadRequest("X-Organisation-Id header is required and must be a valid GUID.");
-            }
+            TryGetOrganisationId(request, out var organisationId);
 
             var today = DateTime.UtcNow.Date;
             var tomorrow = today.AddDays(1);
@@ -192,10 +189,18 @@ public static class DashboardEndpoints
 
     private static bool TryGetOrganisationId(HttpRequest request, out Guid organisationId)
     {
-        organisationId = Guid.Empty;
+        
+        // 1. Probeer header (zoals nu)
+        if (request.Headers.TryGetValue("X-Organisation-Id", out var orgHeader)
+            && Guid.TryParse(orgHeader, out organisationId))
+        {
+            return true;
+        }
 
-        return request.Headers.TryGetValue("X-Organisation-Id", out var orgHeader)
-            && Guid.TryParse(orgHeader, out organisationId);
+        // 2. Fallback (DEV ONLY)
+        organisationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        return true;
+
     }
 }
 

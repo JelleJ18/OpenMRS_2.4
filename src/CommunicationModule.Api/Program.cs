@@ -84,6 +84,7 @@ app.MapDashboardEndpoints();
 app.MapOrganisationEndpoints();
 app.MapOpenMRSInstanceEndpoints();
 app.MapFhirEndpoints();
+app.MapHl7Endpoints();
 
 if (app.Environment.IsDevelopment())
 {
