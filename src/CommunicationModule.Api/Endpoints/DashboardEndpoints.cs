@@ -10,19 +10,27 @@ public static class DashboardEndpoints
     {
         var group = app.MapGroup("/api/dashboard");
 
-        group.MapGet("/stats", async (CommunicationDbContext db, CancellationToken ct) =>
+        group.MapGet("/stats", async (HttpRequest request, CommunicationDbContext db, CancellationToken ct) =>
         {
+            if (!TryGetOrganisationId(request, out var organisationId))
+            {
+                return Results.BadRequest("X-Organisation-Id header is required and must be a valid GUID.");
+            }
+
             var today = DateTime.UtcNow.Date;
             var tomorrow = today.AddDays(1);
 
             var todayLogs = await db.MessageLogs
+                .Where(l => l.OrganisationId == organisationId)
                 .Where(l => l.LoggedAt >= today && l.LoggedAt < tomorrow)
                 .ToListAsync(ct);
 
             var pendingJobs = await db.NotificationJobs
+                .Where(j => j.Appointment.OrganisationId == organisationId)
                 .CountAsync(j => j.Status == NotificationJobStatus.Pending, ct);
 
             var recentErrors = await db.MessageLogs
+                .Where(l => l.OrganisationId == organisationId)
                 .Where(l => !l.Success)
                 .OrderByDescending(l => l.LoggedAt)
                 .Take(10)
@@ -37,7 +45,73 @@ public static class DashboardEndpoints
             ));
         });
 
+        group.MapGet("/metrics", async (HttpRequest request, CommunicationDbContext db, int windowMinutes = 60, CancellationToken ct = default) =>
+        {
+            if (!TryGetOrganisationId(request, out var organisationId))
+            {
+                return Results.BadRequest("X-Organisation-Id header is required and must be a valid GUID.");
+            }
+
+            if (windowMinutes <= 0) windowMinutes = 60;
+
+            var since = DateTime.UtcNow.AddMinutes(-windowMinutes);
+
+            var entries = await db.MessageLogs
+                .Where(l => l.OrganisationId == organisationId && l.LoggedAt >= since)
+                .ToListAsync(ct);
+
+            var totalSent = entries.Count(e => e.Success);
+            var totalFailed = entries.Count(e => !e.Success);
+            var throughputPerMinute = windowMinutes > 0 ? (double)totalSent / windowMinutes : 0.0;
+            var errorRate = (totalSent + totalFailed) == 0 ? 0.0 : (double)totalFailed / (totalSent + totalFailed) * 100.0;
+
+            return Results.Ok(new MetricsResult(
+                ThroughputPerMinute: Math.Round(throughputPerMinute, 2),
+                ErrorRatePercent: Math.Round(errorRate, 2),
+                WindowMinutes: windowMinutes,
+                TotalSent: totalSent,
+                TotalFailed: totalFailed
+            ));
+        });
+
+        group.MapGet("/live", async (HttpRequest request, CommunicationDbContext db, int jobLimit = 100, int errorLimit = 50, CancellationToken ct = default) =>
+        {
+            if (!TryGetOrganisationId(request, out var organisationId))
+            {
+                return Results.BadRequest("X-Organisation-Id header is required and must be a valid GUID.");
+            }
+
+            if (jobLimit <= 0 || jobLimit > 1000) jobLimit = 100;
+            if (errorLimit <= 0 || errorLimit > 500) errorLimit = 50;
+
+            var jobs = await db.NotificationJobs
+                .Where(j => j.Appointment.OrganisationId == organisationId)
+                .Include(j => j.Appointment)
+                .OrderBy(j => j.ScheduledFor)
+                .Take(jobLimit)
+                .Select(j => new NotificationJobItem(
+                    j.Id,
+                    j.AppointmentId,
+                    j.Type,
+                    j.Status,
+                    j.ScheduledFor,
+                    j.RetryCount,
+                    j.SentAt
+                ))
+                .ToListAsync(ct);
+
+            var recentErrors = await db.MessageLogs
+                .Where(l => l.OrganisationId == organisationId && !l.Success)
+                .OrderByDescending(l => l.LoggedAt)
+                .Take(errorLimit)
+                .Select(l => new ErrorSummary(l.Id, l.ProviderName, l.ErrorMessage, l.LoggedAt))
+                .ToListAsync(ct);
+
+            return Results.Ok(new LiveResult(jobs, recentErrors));
+        });
+
         group.MapGet("/logs", async (
+            HttpRequest request,
             CommunicationDbContext db,
             int page = 1,
             int pageSize = 20,
@@ -45,9 +119,14 @@ public static class DashboardEndpoints
             string? provider = null,
             CancellationToken ct = default) =>
         {
+            if (!TryGetOrganisationId(request, out var organisationId))
+            {
+                return Results.BadRequest("X-Organisation-Id header is required and must be a valid GUID.");
+            }
+
             if (pageSize > 100) pageSize = 100;
 
-            var query = db.MessageLogs.AsQueryable();
+            var query = db.MessageLogs.Where(l => l.OrganisationId == organisationId);
 
             if (success.HasValue)
                 query = query.Where(l => l.Success == success.Value);
@@ -75,11 +154,18 @@ public static class DashboardEndpoints
         });
 
         group.MapGet("/jobs", async (
+            HttpRequest request,
             CommunicationDbContext db,
             NotificationJobStatus? status = null,
             CancellationToken ct = default) =>
         {
-            var query = db.NotificationJobs.AsQueryable();
+            if (!TryGetOrganisationId(request, out var organisationId))
+            {
+                return Results.BadRequest("X-Organisation-Id header is required and must be a valid GUID.");
+            }
+
+            var query = db.NotificationJobs
+                .Where(j => j.Appointment.OrganisationId == organisationId);
 
             if (status.HasValue)
                 query = query.Where(j => j.Status == status.Value);
@@ -102,6 +188,14 @@ public static class DashboardEndpoints
         });
 
         return app;
+    }
+
+    private static bool TryGetOrganisationId(HttpRequest request, out Guid organisationId)
+    {
+        organisationId = Guid.Empty;
+
+        return request.Headers.TryGetValue("X-Organisation-Id", out var orgHeader)
+            && Guid.TryParse(orgHeader, out organisationId);
     }
 }
 
@@ -130,5 +224,9 @@ record NotificationJobItem(
     DateTime ScheduledFor,
     int RetryCount,
     DateTime? SentAt);
+
+record MetricsResult(double ThroughputPerMinute, double ErrorRatePercent, int WindowMinutes, int TotalSent, int TotalFailed);
+
+record LiveResult(List<NotificationJobItem> Jobs, List<ErrorSummary> RecentErrors);
 
 record PagedResult<T>(List<T> Items, int Total, int Page, int PageSize);

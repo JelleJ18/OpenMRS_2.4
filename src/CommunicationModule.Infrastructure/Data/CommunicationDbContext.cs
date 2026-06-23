@@ -12,6 +12,7 @@ public class CommunicationDbContext : DbContext
 
     public DbSet<Organisation> Organisations { get; set; } = null!;
     public DbSet<ProviderSubscription> ProviderSubscriptions { get; set; } = null!;
+    public DbSet<OpenMRSInstance> OpenMRSInstances { get; set; } = null!;
     public DbSet<Appointment> Appointments { get; set; } = null!;
     public DbSet<NotificationJob> NotificationJobs { get; set; } = null!;
     public DbSet<MessageLog> MessageLogs { get; set; } = null!;
@@ -39,6 +40,24 @@ public class CommunicationDbContext : DbContext
                 .HasConstraintName("fk_providersubscriptions_organisations_organisationid")
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+            modelBuilder.Entity<OpenMRSInstance>(eb =>
+            {
+                eb.ToTable("openmrsinstances");
+                eb.HasKey(i => i.Id);
+                eb.Property(i => i.DisplayName).IsRequired();
+                eb.Property(i => i.BaseUrl).IsRequired();
+                eb.Property(i => i.ApiVersion).IsRequired();
+                eb.Property(i => i.AccessKeyHash).IsRequired();
+
+                eb.HasIndex(i => new { i.OrganisationId, i.BaseUrl }).IsUnique();
+
+                eb.HasOne(i => i.Organisation)
+                .WithMany(o => o.OpenMRSInstances)
+                .HasForeignKey(i => i.OrganisationId)
+                .HasConstraintName("fk_openmrsinstances_organisations_organisationid")
+                .OnDelete(DeleteBehavior.Cascade);
+            });
 
         modelBuilder.Entity<Appointment>(eb =>
         {

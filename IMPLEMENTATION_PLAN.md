@@ -9,43 +9,54 @@ A **SaaS service** that sits between OpenMRS (the hospital system) and patients'
 ## Phase 1 — Foundation
 
 ### 1. Project setup
+
 C# solution with the following projects:
+
 - `CommunicationModule.Api` — HTTP API that OpenMRS talks to
 - `CommunicationModule.Core` — business logic (scheduling, retry, provider routing)
 - `CommunicationModule.Infrastructure` — database, messaging provider clients, secrets
 - `CommunicationModule.Dashboard` — real-time monitoring UI (Blazor or React)
 
 ### 2. Database schema (SQL)
-| Table | Purpose |
-|---|---|
-| `Organisations` | Multi-tenant: each hospital is a tenant |
-| `ProviderSubscriptions` | Which provider a hospital uses (credentials AES-256 encrypted) |
-| `NotificationJobs` | Scheduled notifications (appointment ID, send time, status) |
-| `MessageLogs` | Outcome of each send attempt — **no PII**, only message ID, timestamp, status, provider |
+
+| Table                   | Purpose                                                                                 |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `Organisations`         | Multi-tenant: each hospital is a tenant                                                 |
+| `ProviderSubscriptions` | Which provider a hospital uses (credentials AES-256 encrypted)                          |
+| `NotificationJobs`      | Scheduled notifications (appointment ID, send time, status)                             |
+| `MessageLogs`           | Outcome of each send attempt — **no PII**, only message ID, timestamp, status, provider |
 
 ### 3. OpenMRS integration
-- OpenMRS 2.7.x exposes a **FHIR R4 REST API**
-- The API layer receives a **FHIR Appointment resource** from OpenMRS (via webhook or polling)
-- Validate the incoming FHIR message and return an **ACK** (acknowledgement)
+
+- OpenMRS 2.7.x sends **FHIR R4 Appointment** messages to the API.
+- The default setup is **webhook**. Polling is only a fallback option if a hospital cannot push messages.
+- Expected resources are **Appointment** and, when needed, **Patient**, **Practitioner**, and **Location**.
+- The API validates the message and returns a simple **ACK** or error response.
+- OpenMRS admins need the API URL, the `X-OpenMRS-Instance-Id` header, and the instance access key.
 
 ---
 
 ## Phase 2 — Core Logic
 
 ### 4. Scheduling engine
+
 - When an appointment is received, schedule two jobs: **T-24h** and **T-1h**
 - Before sending: check if appointment has already started — if yes, skip
 - Use **Hangfire** (C# background job library) to persist and execute scheduled jobs
 
 ### 5. Provider abstraction — Strategy pattern
+
 Create an `IMessagingProvider` interface:
+
 ```csharp
 public interface IMessagingProvider
 {
     Task<SendResult> SendAsync(NotificationMessage message);
 }
 ```
+
 Implement it four times:
+
 - `SwiftSendProvider`
 - `LegacyLinkProvider`
 - `AsyncFlowProvider`
@@ -56,6 +67,7 @@ The Core layer never knows which provider is active — it only calls the interf
 > **Why Strategy pattern?** Different hospitals use different providers. This lets you swap providers per organisation without changing core logic.
 
 ### 6. Retry & fallback mechanism
+
 - On send failure: retry with **exponential backoff** (1 min → 2 min → 4 min → ...)
 - Log each attempt (without PII)
 - After max retries: mark as failed, raise alert
@@ -66,11 +78,13 @@ The Core layer never knows which provider is active — it only calls the interf
 ## Phase 3 — Security
 
 ### 7. Secrets management
+
 - Provider credentials go in **environment variables** or a secrets vault (Azure Key Vault / HashiCorp Vault)
 - **Never** store credentials in `appsettings.json` or source code
 - Encrypt sensitive DB fields (credentials, tokens) with **AES-256**
 
 ### 8. Transport security
+
 - All HTTP endpoints enforce **TLS 1.3**
 - Authenticate the OpenMRS → API connection via **API key per organisation** or OAuth2
 
@@ -79,10 +93,12 @@ The Core layer never knows which provider is active — it only calls the interf
 ## Phase 4 — Observability & Dashboard
 
 ### 9. OpenTelemetry
+
 - Add distributed tracing and metrics to the C# service
 - Export to: **Jaeger** (traces) and **Prometheus** (metrics)
 
 ### 10. Dashboard
+
 - Per-organisation view: messages sent / failed / pending
 - Throughput and error rate graphs
 - Real-time updates via **SignalR** or polling
@@ -92,6 +108,7 @@ The Core layer never knows which provider is active — it only calls the interf
 ## Phase 5 — Data Retention
 
 ### 11. Automated cleanup jobs
+
 - Scheduled job: **delete patient/appointment data within 14 days** of communication
 - **Meta-information** (no PII) retained for up to **1 year** for billing verification
 - Logs must **never** contain PII (patient name, BSN, phone number, etc.)

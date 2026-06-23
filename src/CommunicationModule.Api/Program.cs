@@ -18,11 +18,13 @@ if (string.IsNullOrWhiteSpace(encryptionKey))
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton(new AesEncryptionService(encryptionKey));
+builder.Services.AddSingleton<TenantAccessService>();
 
 builder.Services.AddHangfire(config => config.UseInMemoryStorage());
 builder.Services.AddHangfireServer();
 builder.Services.AddScoped<AppointmentIngestionService>();
 builder.Services.AddScoped<NotificationDispatchService>();
+builder.Services.AddScoped<CommunicationModule.Core.Interfaces.IEventPublisher, CommunicationModule.Infrastructure.Services.EventPublisher>();
 
 var conn = DatabaseConnectionResolver.ResolveConnectionString(builder.Configuration);
 var serverVersion = DatabaseConnectionResolver.GetServerVersion();
@@ -80,6 +82,7 @@ app.MapGet("/weatherforecast", () =>
 
 app.MapDashboardEndpoints();
 app.MapOrganisationEndpoints();
+app.MapOpenMRSInstanceEndpoints();
 app.MapFhirEndpoints();
 
 if (app.Environment.IsDevelopment())

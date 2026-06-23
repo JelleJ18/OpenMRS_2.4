@@ -1,6 +1,7 @@
 using CommunicationModule.Api.Services;
 using Hl7.Fhir.Model;
 using Hl7.Fhir.Serialization;
+using Microsoft.EntityFrameworkCore;
 
 namespace CommunicationModule.Api.Endpoints;
 
@@ -35,15 +36,45 @@ public static class FhirEndpoints
         // }
         group.MapPost("/appointments", async (
             HttpRequest request,
+            CommunicationModule.Infrastructure.Data.CommunicationDbContext db,
+            TenantAccessService accessService,
             AppointmentIngestionService ingestion,
             CancellationToken ct) =>
         {
-            if (!request.Headers.TryGetValue("X-Organisation-Id", out var orgHeader)
-                || !Guid.TryParse(orgHeader, out var organisationId))
+            if (!request.Headers.TryGetValue("X-OpenMRS-Instance-Id", out var instanceHeader)
+                || !Guid.TryParse(instanceHeader, out var instanceId))
             {
-                return BuildOutcome(
+                return BuildNak(
                     OperationOutcome.IssueSeverity.Error,
-                    "X-Organisation-Id header is required and must be a valid GUID.");
+                    "X-OpenMRS-Instance-Id header is required and must be a valid GUID.");
+            }
+
+            if (!request.Headers.TryGetValue("X-OpenMRS-Access-Key", out var accessKeyHeader)
+                || string.IsNullOrWhiteSpace(accessKeyHeader))
+            {
+                return BuildNak(
+                    OperationOutcome.IssueSeverity.Error,
+                    "X-OpenMRS-Access-Key header is required.");
+            }
+
+            var instance = await db.OpenMRSInstances
+                .AsNoTracking()
+                .FirstOrDefaultAsync(i => i.Id == instanceId && i.IsActive, ct);
+
+            if (instance is null)
+            {
+                return BuildNak(
+                    OperationOutcome.IssueSeverity.Error,
+                    "Unknown OpenMRS instance.",
+                    StatusCodes.Status404NotFound);
+            }
+
+            if (!accessService.Matches(accessKeyHeader.ToString(), instance.AccessKeyHash))
+            {
+                return BuildNak(
+                    OperationOutcome.IssueSeverity.Error,
+                    "Invalid OpenMRS access key.",
+                    StatusCodes.Status401Unauthorized);
             }
 
             string fhirJson;
@@ -51,25 +82,37 @@ public static class FhirEndpoints
                 fhirJson = await reader.ReadToEndAsync(ct);
 
             if (string.IsNullOrWhiteSpace(fhirJson))
-                return BuildOutcome(OperationOutcome.IssueSeverity.Error, "Request body is empty.");
+                return BuildNak(OperationOutcome.IssueSeverity.Error, "Request body is empty.");
 
-            var result = await ingestion.IngestAsync(fhirJson, organisationId, ct);
+            if (!fhirJson.TrimStart().StartsWith('{'))
+                return BuildNak(OperationOutcome.IssueSeverity.Error, "Request body must be valid FHIR JSON.");
+
+            var result = await ingestion.IngestAsync(fhirJson, instance.OrganisationId, ct);
 
             if (!result.Success)
-                return BuildOutcome(OperationOutcome.IssueSeverity.Error, result.Error!);
+                return BuildNak(OperationOutcome.IssueSeverity.Error, result.Error!);
 
             var message = result.Scheduled
-                ? $"Appointment {result.AppointmentId} received and notifications scheduled."
-                : $"Appointment {result.AppointmentId} updated — no new jobs scheduled.";
+                ? $"Appointment {result.AppointmentId} accepted and queued for processing."
+                : $"Appointment {result.AppointmentId} accepted and updated.";
 
-            return BuildOutcome(OperationOutcome.IssueSeverity.Information, message, StatusCodes.Status200OK);
+            return BuildAck(message, StatusCodes.Status202Accepted);
         })
         .Accepts<string>("application/fhir+json", "application/json")
-        .Produces(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status202Accepted)
         .Produces(StatusCodes.Status400BadRequest);
 
         return app;
     }
+
+    private static IResult BuildAck(string message, int statusCode = StatusCodes.Status202Accepted)
+        => BuildOutcome(OperationOutcome.IssueSeverity.Information, message, statusCode);
+
+    private static IResult BuildNak(
+        OperationOutcome.IssueSeverity severity,
+        string message,
+        int statusCode = StatusCodes.Status400BadRequest)
+        => BuildOutcome(severity, message, statusCode);
 
     private static IResult BuildOutcome(
         OperationOutcome.IssueSeverity severity,

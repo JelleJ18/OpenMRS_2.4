@@ -14,15 +14,18 @@ public class AppointmentIngestionService
     private readonly CommunicationDbContext _db;
     private readonly AesEncryptionService _encryption;
     private readonly IBackgroundJobClient _jobs;
+    private readonly CommunicationModule.Core.Interfaces.IEventPublisher _events;
 
     public AppointmentIngestionService(
         CommunicationDbContext db,
         AesEncryptionService encryption,
-        IBackgroundJobClient jobs)
+        IBackgroundJobClient jobs,
+        CommunicationModule.Core.Interfaces.IEventPublisher events)
     {
         _db = db;
         _encryption = encryption;
         _jobs = jobs;
+        _events = events;
     }
 
     public async Task<IngestionResult> IngestAsync(
@@ -33,7 +36,7 @@ public class AppointmentIngestionService
         Hl7.Fhir.Model.Appointment fhir;
         try
         {
-            var deserializer = new FhirJsonDeserializer(new DeserializerSettings { AcceptUnknownMembers = true });
+            var deserializer = new FhirJsonDeserializer(new DeserializerSettings { AcceptUnknownMembers = false });
             fhir = deserializer.Deserialize<Hl7.Fhir.Model.Appointment>(fhirJson);
         }
         catch (Exception ex)
@@ -41,21 +44,22 @@ public class AppointmentIngestionService
             return IngestionResult.Fail($"Invalid FHIR Appointment: {ex.Message}");
         }
 
-        if (string.IsNullOrEmpty(fhir.Id))
-            return IngestionResult.Fail("Appointment.id is required.");
+        var validationError = ValidateAppointment(fhir);
+        if (validationError is not null)
+            return IngestionResult.Fail(validationError);
 
-        if (fhir.Start is null)
+        var start = fhir.Start;
+        if (start is null)
             return IngestionResult.Fail("Appointment.start is required.");
 
-        var appointmentTime = fhir.Start.Value.UtcDateTime;
+        var appointmentTime = start.Value.UtcDateTime;
         var status = MapStatus(fhir.Status);
-        var location = fhir.Participant
-            .FirstOrDefault(p => p.Actor?.Reference?.StartsWith("Location/") == true)
-            ?.Actor?.Display ?? "Unknown location";
+        var location = ExtractLocation(fhir);
         var patientPhone = ExtractPatientPhone(fhir);
+        var appointmentId = fhir.Id ?? string.Empty;
 
         if (string.IsNullOrEmpty(patientPhone))
-            return IngestionResult.Fail("No patient phone number found in Appointment.");
+            return IngestionResult.Fail("Patient.telecom must contain a phone number.");
 
         var encryptedPhone = _encryption.Encrypt(patientPhone);
 
@@ -71,7 +75,7 @@ public class AppointmentIngestionService
             appointment = new Core.Models.Appointment
             {
                 Id = Guid.NewGuid(),
-                FhirAppointmentId = fhir.Id,
+                FhirAppointmentId = appointmentId,
                 OrganisationId = organisationId
             };
             _db.Appointments.Add(appointment);
@@ -86,6 +90,7 @@ public class AppointmentIngestionService
         if (status != AppointmentStatus.Scheduled)
         {
             await _db.SaveChangesAsync(ct);
+            await _events.PublishAsync(new CommunicationModule.Core.Events.AppointmentReceivedEvent(appointment.Id, organisationId, appointmentTime, location), ct);
             return IngestionResult.Ok(appointment.Id, scheduled: false);
         }
 
@@ -127,7 +132,62 @@ public class AppointmentIngestionService
         }
 
         await _db.SaveChangesAsync(ct);
+        await _events.PublishAsync(new CommunicationModule.Core.Events.AppointmentReceivedEvent(appointment.Id, organisationId, appointmentTime, location), ct);
         return IngestionResult.Ok(appointment.Id, scheduled: isNew);
+    }
+
+    private static string? ValidateAppointment(Hl7.Fhir.Model.Appointment fhir)
+    {
+        if (string.IsNullOrWhiteSpace(fhir.Id))
+            return "Appointment.id is required.";
+
+        if (fhir.Start is null)
+            return "Appointment.start is required.";
+
+        if (fhir.Status is null)
+            return "Appointment.status is required.";
+
+        var patientParticipant = fhir.Participant.FirstOrDefault(p => p.Actor?.Reference?.StartsWith("Patient/") == true);
+        var patientActor = patientParticipant?.Actor;
+        if (patientActor?.Reference is null)
+            return "Appointment must contain a Patient reference.";
+
+        var patientRef = patientActor.Reference;
+        if (!patientRef.StartsWith("Patient/"))
+            return "Patient reference must use the format Patient/{id}.";
+
+        var patientId = patientRef.Replace("Patient/", string.Empty).TrimStart('#');
+        if (string.IsNullOrWhiteSpace(patientId))
+            return "Patient reference is invalid.";
+
+        var patient = fhir.Contained.OfType<Patient>().FirstOrDefault(p => p.Id == patientId);
+        if (patient is null)
+            return "Contained Patient resource is missing.";
+
+        if (patient.Telecom is null || !patient.Telecom.Any(t => t.System == ContactPoint.ContactPointSystem.Phone && !string.IsNullOrWhiteSpace(t.Value)))
+            return "Contained Patient must include a phone number.";
+
+        var locationParticipant = fhir.Participant.FirstOrDefault(p => p.Actor?.Reference?.StartsWith("Location/") == true);
+        var locationActor = locationParticipant?.Actor;
+        if (locationActor?.Reference is not null)
+        {
+            var locationRef = locationActor.Reference;
+            if (!locationRef.StartsWith("Location/"))
+                return "Location reference must use the format Location/{id}.";
+
+            var locationId = locationRef.Replace("Location/", string.Empty).TrimStart('#');
+            if (string.IsNullOrWhiteSpace(locationId))
+                return "Location reference is invalid.";
+        }
+
+        return null;
+    }
+
+    private static string ExtractLocation(Hl7.Fhir.Model.Appointment fhir)
+    {
+        return fhir.Participant
+            .FirstOrDefault(p => p.Actor?.Reference?.StartsWith("Location/") == true)
+            ?.Actor?.Display ?? "Unknown location";
     }
 
     private static string? ExtractPatientPhone(Hl7.Fhir.Model.Appointment fhir)
