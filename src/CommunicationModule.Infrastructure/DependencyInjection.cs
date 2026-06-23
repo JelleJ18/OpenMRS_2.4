@@ -1,7 +1,6 @@
 using CommunicationModule.Core.Interfaces;
 using CommunicationModule.Infrastructure.Messaging;
 using CommunicationModule.Infrastructure.Providers.SwiftSend;
-namespace CommunicationModule.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using CommunicationModule.Infrastructure.Providers.LegacyLink;
@@ -9,6 +8,10 @@ using System.Net.Http.Headers;
 using System.Text;
 using CommunicationModule.Infrastructure.Providers.SecurePost;
 using CommunicationModule.Infrastructure.Providers.AsyncFlow;
+using MassTransit;
+using CommunicationModule.Infrastructure.Consumers;
+
+namespace CommunicationModule.Infrastructure;
 
 public static class DependencyInjection
 {
@@ -60,6 +63,33 @@ public static class DependencyInjection
             client.BaseAddress = new Uri(baseUrl);
             client.DefaultRequestHeaders.Add("X-API-KEY", configuration["Providers:AsyncFlow:ApiKey"]);
             client.DefaultRequestHeaders.Add("X-STUDENT-GROUP", configuration["Providers:AsyncFlow:StudentGroup"]);
+        });
+
+        services.AddMassTransit(x =>
+        {
+            x.AddConsumer<SendNotificationConsumer>();
+
+            x.UsingRabbitMq((context, cfg) =>
+            {
+                cfg.Host(configuration["RabbitMQ:Host"] ?? "localhost", "/", h =>
+                {
+                    h.Username(configuration["RabbitMQ:Username"] ?? "guest");
+                    h.Password(configuration["RabbitMQ:Password"] ?? "guest");
+                });
+
+                cfg.UseMessageRetry(r => r.Intervals(
+                    TimeSpan.FromSeconds(10),
+                    TimeSpan.FromSeconds(30),
+                    TimeSpan.FromSeconds(60),
+                    TimeSpan.FromMinutes(5),
+                    TimeSpan.FromMinutes(15)
+                ));
+
+                cfg.ReceiveEndpoint("send-notification", e =>
+                {
+                    e.ConfigureConsumer<SendNotificationConsumer>(context);
+                });
+            });
         });
 
         services.AddScoped<IMessagingProvider>(sp => sp.GetRequiredService<AsyncFlowProvider>());
