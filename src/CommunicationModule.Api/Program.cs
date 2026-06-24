@@ -6,6 +6,8 @@ using Hangfire;
 using Hangfire.InMemory;
 using OpenTelemetry.Metrics;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Authentication;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -45,6 +47,14 @@ var serverVersion = DatabaseConnectionResolver.GetServerVersion();
 builder.Services.AddDbContext<CommunicationDbContext>(opts =>
     opts.UseMySql(conn, serverVersion, mySqlOptions =>
         mySqlOptions.MigrationsHistoryTable("__efmigrationshistory")));
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ConfigureHttpsDefaults(httpsOptions =>
+    {
+        httpsOptions.SslProtocols = SslProtocols.Tls13;
+    });
+});
 
 var app = builder.Build();
 
