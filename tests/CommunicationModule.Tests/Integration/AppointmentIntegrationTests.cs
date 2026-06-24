@@ -31,7 +31,8 @@ public class Hl7IntegrationTests
         db.Organisations.Add(new Organisation
         {
             Id = organisationId,
-            Name = "Test Organisation"
+            Name = "Test Organisation",
+            ApiKeyHash = "TEST_HASH"
         });
 
         await db.SaveChangesAsync();
