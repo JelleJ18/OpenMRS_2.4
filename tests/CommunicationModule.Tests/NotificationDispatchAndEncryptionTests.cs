@@ -96,6 +96,73 @@ public class NotificationDispatchAndEncryptionTests
             log.ProviderMessageId == "msg-123");
     }
 
+    // Test: controleert dat de dispatchlaag naast versturen ook een MessageLoggedEvent publiceert.
+    [Fact]
+    public async Task DispatchAsync_WhenProviderSucceeds_PublishesMessageLoggedEventAndWritesLog()
+    {
+        var encryption = new AesEncryptionService(CreateBase64Key());
+        await using var db = CreateDbContext();
+        var organisation = new Organisation { Id = Guid.NewGuid(), Name = "Clinic" };
+        var appointment = new Appointment
+        {
+            Id = Guid.NewGuid(),
+            OrganisationId = organisation.Id,
+            Organisation = organisation,
+            FhirAppointmentId = "fhir-logged",
+            EncryptedPatientPhone = encryption.Encrypt("+31655555555"),
+            AppointmentDateTime = DateTime.UtcNow.AddHours(2),
+            Location = "Room 2"
+        };
+        var job = new NotificationJob
+        {
+            Id = Guid.NewGuid(),
+            AppointmentId = appointment.Id,
+            Appointment = appointment,
+            Type = NotificationJobType.TwentyFourHour,
+            ScheduledFor = DateTime.UtcNow.AddMinutes(-1)
+        };
+        var providerSubscription = new ProviderSubscription
+        {
+            Id = Guid.NewGuid(),
+            OrganisationId = organisation.Id,
+            Organisation = organisation,
+            ProviderName = "FastText",
+            IsActive = true
+        };
+
+        db.AddRange(organisation, appointment, job, providerSubscription);
+        await db.SaveChangesAsync();
+
+        var provider = new SequencedProvider("FastText", new SendResult
+        {
+            Success = true,
+            ProviderMessageId = "fast-777"
+        });
+        var eventsMock = new Mock<IEventPublisher>();
+        eventsMock
+            .Setup(x => x.PublishAsync(It.IsAny<IIntegrationEvent>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var dispatcher = CreateDispatcher(db, encryption, provider, eventsMock.Object);
+
+        await dispatcher.DispatchAsync(job.Id, CancellationToken.None);
+
+        db.MessageLogs.Should().ContainSingle(log =>
+            log.NotificationJobId == job.Id &&
+            log.Success &&
+            log.ProviderName == "FastText" &&
+            log.ProviderMessageId == "fast-777");
+
+        eventsMock.Verify(x => x.PublishAsync(
+                It.Is<MessageLoggedEvent>(evt =>
+                    evt.NotificationJobId == job.Id &&
+                    evt.OrganisationId == organisation.Id &&
+                    evt.ProviderName == "FastText" &&
+                    evt.Success &&
+                    evt.ErrorMessage == null),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
     // Test: simulatie van een tijdelijke provideruitval gevolgd door een succesvolle retry.
     // - eerste oproep: provider retourneert failure → job wordt Failed en RetryCount verhoogd
     // - tweede oproep: provider retourneert succes → job wordt Sent en SentAt gezet
@@ -170,6 +237,18 @@ public class NotificationDispatchAndEncryptionTests
         IMessagingProvider provider)
     {
         var eventPublisher = new NoopEventPublisher();
+        var logger = Mock.Of<ILogger<NotificationDispatchService>>();
+
+        return new NotificationDispatchService(db, encryption, [provider], eventPublisher, logger);
+    }
+
+    // Helper: maakt een dispatcher met een test-provider en een expliciete eventpublisher.
+    private static NotificationDispatchService CreateDispatcher(
+        CommunicationDbContext db,
+        AesEncryptionService encryption,
+        IMessagingProvider provider,
+        IEventPublisher eventPublisher)
+    {
         var logger = Mock.Of<ILogger<NotificationDispatchService>>();
 
         return new NotificationDispatchService(db, encryption, [provider], eventPublisher, logger);
