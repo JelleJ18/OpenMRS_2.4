@@ -7,7 +7,7 @@ using Hangfire.InMemory;
 using OpenTelemetry.Metrics;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Authentication;
-
+using CommunicationModule.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -65,6 +65,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// API key controle 
+app.UseMiddleware<ApiKeyMiddleware>();
 
 app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken cancellationToken) =>
 {
