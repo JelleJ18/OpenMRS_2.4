@@ -12,10 +12,13 @@ public static class OrganisationEndpoints
     {
         var group = app.MapGroup("/api/organisations");
 
-        // 🔐 GET: only current organisation (NOT all orgs anymore)
-        group.MapGet("/", async (HttpContext ctx, CommunicationDbContext db, CancellationToken ct) =>
+        // GET current organisation only
+        group.MapGet("/", async (
+            HttpContext httpContext,
+            CommunicationDbContext db,
+            CancellationToken ct) =>
         {
-            var organisation = ctx.Items["Organisation"] as Organisation;
+            var organisation = httpContext.Items["Organisation"] as Organisation;
 
             if (organisation is null)
                 return Results.Unauthorized();
@@ -24,42 +27,62 @@ public static class OrganisationEndpoints
                 .AsNoTracking()
                 .Include(o => o.ProviderSubscriptions)
                 .Include(o => o.OpenMRSInstances)
-                .FirstAsync(o => o.Id == organisation.Id, ct);
+                .FirstOrDefaultAsync(o => o.Id == organisation.Id, ct);
+
+            if (org is null)
+                return Results.NotFound();
 
             var response = new OrganisationItem(
                 org.Id,
                 org.Name,
                 org.ProviderSubscriptions
-                    .Select(p => new ProviderItem(p.Id, p.ProviderName, p.IsActive, p.CreatedAt))
+                    .Select(p => new ProviderItem(
+                        p.Id,
+                        p.ProviderName,
+                        p.IsActive,
+                        p.CreatedAt))
                     .ToList(),
                 org.OpenMRSInstances
-                    .Select(i => new OpenMRSInstanceItem(i.Id, i.DisplayName, i.BaseUrl, i.ApiVersion, i.IsActive, i.CreatedAt))
-                    .ToList()
-            );
+                    .Select(i => new OpenMRSInstanceItem(
+                        i.Id,
+                        i.DisplayName,
+                        i.BaseUrl,
+                        i.ApiVersion,
+                        i.IsActive,
+                        i.CreatedAt))
+                    .ToList());
 
             return Results.Ok(response);
         });
 
-        // 🔧 Providers (unchanged, already correct multi-tenant style)
+        // Create or update provider configuration
         group.MapPost("/{organisationId:guid}/providers", async (
+            HttpContext httpContext,
             Guid organisationId,
             ProviderSubscriptionRequest request,
             CommunicationDbContext db,
             AesEncryptionService encryption,
             CancellationToken ct) =>
         {
+            var currentOrg = httpContext.Items["Organisation"] as Organisation;
+
+            if (currentOrg is null)
+                return Results.Unauthorized();
+
+            if (currentOrg.Id != organisationId)
+                return Results.Forbid();
+
             if (string.IsNullOrWhiteSpace(request.ProviderName))
                 return Results.BadRequest("ProviderName is required.");
 
             if (string.IsNullOrWhiteSpace(request.ApiKey))
                 return Results.BadRequest("ApiKey is required.");
 
-            var organisationExists = await db.Organisations.AnyAsync(o => o.Id == organisationId, ct);
-            if (!organisationExists)
-                return Results.NotFound();
-
             var existing = await db.ProviderSubscriptions
-                .FirstOrDefaultAsync(p => p.OrganisationId == organisationId && p.ProviderName == request.ProviderName, ct);
+                .FirstOrDefaultAsync(
+                    p => p.OrganisationId == organisationId &&
+                         p.ProviderName == request.ProviderName,
+                    ct);
 
             if (existing is null)
             {
@@ -71,20 +94,28 @@ public static class OrganisationEndpoints
                     EncryptedApiKey = encryption.Encrypt(request.ApiKey.Trim()),
                     IsActive = true
                 };
+
                 db.ProviderSubscriptions.Add(existing);
             }
             else
             {
-                existing.EncryptedApiKey = encryption.Encrypt(request.ApiKey.Trim());
+                existing.EncryptedApiKey =
+                    encryption.Encrypt(request.ApiKey.Trim());
+
                 existing.IsActive = true;
             }
 
             await db.SaveChangesAsync(ct);
 
-            return Results.Ok(new ProviderItem(existing.Id, existing.ProviderName, existing.IsActive, existing.CreatedAt));
+            return Results.Ok(
+                new ProviderItem(
+                    existing.Id,
+                    existing.ProviderName,
+                    existing.IsActive,
+                    existing.CreatedAt));
         });
 
-        // 🔐 CREATE organisation (ONLY endpoint without API key)
+        // Create organisation (public endpoint)
         group.MapPost("/", async (
             CreateOrganisationRequest request,
             CommunicationDbContext db,
@@ -104,26 +135,46 @@ public static class OrganisationEndpoints
             };
 
             db.Organisations.Add(organisation);
+
             await db.SaveChangesAsync(ct);
 
-            return Results.Created($"/api/organisations/{organisation.Id}", new
-            {
-                organisation.Id,
-                organisation.Name,
-                ApiKey = apiKey.PlainTextKey
-            });
+            return Results.Created(
+                $"/api/organisations/{organisation.Id}",
+                new
+                {
+                    organisation.Id,
+                    organisation.Name,
+                    ApiKey = apiKey.PlainTextKey
+                });
         });
 
         return app;
     }
 }
 
-record OrganisationItem(Guid Id, string Name, List<ProviderItem> Providers, List<OpenMRSInstanceItem> OpenMRSInstances);
+record OrganisationItem(
+    Guid Id,
+    string Name,
+    List<ProviderItem> Providers,
+    List<OpenMRSInstanceItem> OpenMRSInstances);
 
-record ProviderItem(Guid Id, string ProviderName, bool IsActive, DateTime CreatedAt);
+record ProviderItem(
+    Guid Id,
+    string ProviderName,
+    bool IsActive,
+    DateTime CreatedAt);
 
-record ProviderSubscriptionRequest(string ProviderName, string ApiKey);
+record ProviderSubscriptionRequest(
+    string ProviderName,
+    string ApiKey);
 
-record OpenMRSInstanceItem(Guid Id, string DisplayName, string BaseUrl, string ApiVersion, bool IsActive, DateTime CreatedAt);
+record OpenMRSInstanceItem(
+    Guid Id,
+    string DisplayName,
+    string BaseUrl,
+    string ApiVersion,
+    bool IsActive,
+    DateTime CreatedAt);
 
-record CreateOrganisationRequest(string Name);
+record CreateOrganisationRequest(
+    string Name);
