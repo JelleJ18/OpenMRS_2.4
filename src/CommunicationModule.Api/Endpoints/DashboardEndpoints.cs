@@ -1,6 +1,7 @@
 using CommunicationModule.Core.Enums;
 using CommunicationModule.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using CommunicationModule.Core.Models;
 
 namespace CommunicationModule.Api.Endpoints;
 
@@ -187,21 +188,20 @@ public static class DashboardEndpoints
         return app;
     }
 
-    private static bool TryGetOrganisationId(HttpRequest request, out Guid organisationId)
+private static bool TryGetOrganisationId(
+    HttpRequest request,
+    out Guid organisationId)
+{
+    organisationId = Guid.Empty;
+
+    if (request.HttpContext.Items["Organisation"] is Organisation organisation)
     {
-        
-        // 1. Probeer header (zoals nu)
-        if (request.Headers.TryGetValue("X-Organisation-Id", out var orgHeader)
-            && Guid.TryParse(orgHeader, out organisationId))
-        {
-            return true;
-        }
-
-        // 2. Fallback (DEV ONLY)
-        organisationId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        organisationId = organisation.Id;
         return true;
-
     }
+
+    return false;
+}
 }
 
 record DashboardStats(

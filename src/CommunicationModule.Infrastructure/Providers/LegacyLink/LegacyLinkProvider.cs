@@ -20,60 +20,76 @@ public class LegacyLinkProvider : IMessagingProvider
         _logger = logger;
     }
 
-    public async Task<SendResult> SendAsync(
-        NotificationMessage message,
-        CancellationToken cancellationToken = default)
+    public async Task<SendResult> SendAsync(NotificationMessage message, CancellationToken ct = default)
     {
         try
         {
+            // ======================
+            // BASIC AUTH (correct)
+            // ======================
+            var credentials = "legacylink-user:legacylink-password";
+            var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(credentials));
+
+            var request = new HttpRequestMessage(HttpMethod.Post, "/LegacyLink/SendSms");
+
+            request.Headers.Authorization =
+                new AuthenticationHeaderValue("Basic", base64);
+
+            request.Headers.Add("X-STUDENT-GROUP", "group-1");
+            request.Headers.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("application/xml"));
+
+            // ======================
+            // SOAP XML BODY
+            // ======================
             var xml = $"""
                 <?xml version="1.0" encoding="utf-8"?>
                 <SendSmsRequest xmlns="http://legacylink.fakecomworld.com/v1">
-                  <PhoneNumber>{message.PhoneNumber}</PhoneNumber>
-                  <MessageText>{message.MessageBody}</MessageText>
-                  <SenderIdentification>CommunicationModule</SenderIdentification>
+                    <PhoneNumber>{message.PhoneNumber}</PhoneNumber>
+                    <MessageText>{message.MessageBody}</MessageText>
+                    <SenderIdentification>CommunicationModule</SenderIdentification>
                 </SendSmsRequest>
                 """;
 
-            var content = new StringContent(xml, Encoding.UTF8, "application/xml");
+            request.Content = new StringContent(xml, Encoding.UTF8, "application/xml");
 
-            var response = await _httpClient.PostAsync(
-                "LegacyLink/SendSms",
-                content,
-                cancellationToken);
-
-            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            // ======================
+            // SEND REQUEST
+            // ======================
+            var response = await _httpClient.SendAsync(request, ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
 
             if (response.IsSuccessStatusCode)
             {
-                var doc = XDocument.Parse(responseBody);
+                var doc = XDocument.Parse(body);
                 XNamespace ns = "http://legacylink.fakecomworld.com/v1";
-                var messageReference = doc.Root?.Element(ns + "MessageReference")?.Value;
+
+                var id = doc.Root?
+                    .Element(ns + "MessageReference")?
+                    .Value;
 
                 return new SendResult
                 {
                     Success = true,
-                    ProviderMessageId = messageReference ?? ProviderName
+                    ProviderMessageId = id ?? "LegacyLink"
                 };
             }
 
-            _logger.LogWarning("LegacyLink failed with status {StatusCode}: {Body}",
-                response.StatusCode, responseBody);
+            _logger.LogWarning("LegacyLink failed: {Body}", body);
 
             return new SendResult
             {
                 Success = false,
-                ProviderMessageId = ProviderName,
-                ErrorMessage = $"HTTP {(int)response.StatusCode}"
+                ErrorMessage = body
             };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error sending message via LegacyLink");
+            _logger.LogError(ex, "LegacyLink error");
+
             return new SendResult
             {
                 Success = false,
-                ProviderMessageId = ProviderName,
                 ErrorMessage = ex.Message
             };
         }

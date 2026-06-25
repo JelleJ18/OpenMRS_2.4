@@ -1,32 +1,41 @@
 using CommunicationModule.Api.Endpoints;
+using CommunicationModule.Api.Middleware;
 using CommunicationModule.Api.Services;
+using CommunicationModule.Core.Interfaces;
 using CommunicationModule.Infrastructure.Data;
 using CommunicationModule.Infrastructure.Services;
+using CommunicationModule.Infrastructure.Providers.SwiftSend;
+using CommunicationModule.Infrastructure.Providers.LegacyLink;
+using CommunicationModule.Infrastructure.Providers.AsyncFlow;
+using CommunicationModule.Infrastructure.Providers.SecurePost;
 using Hangfire;
 using Hangfire.InMemory;
-using OpenTelemetry.Metrics;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Metrics;
 using System.Security.Authentication;
-using CommunicationModule.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ======================
+// CORE
+// ======================
 builder.Services.AddScoped<DataRetentionService>();
-
 builder.Services.AddHostedService<DataRetentionBackgroundService>();
 
 builder.Configuration.AddUserSecrets<Program>(optional: true);
 
 var encryptionKey = builder.Configuration["Crypto:Key"];
 if (string.IsNullOrWhiteSpace(encryptionKey))
-{
-    throw new InvalidOperationException("Missing required user secret 'Crypto:Key'.");
-}
+    throw new InvalidOperationException("Missing Crypto:Key");
 
-builder.Services.AddOpenApi();
 builder.Services.AddSingleton(new AesEncryptionService(encryptionKey));
 builder.Services.AddSingleton<TenantAccessService>();
 
+builder.Services.AddScoped<IEventPublisher, EventPublisher>();
+
+// ======================
+// METRICS
+// ======================
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
     {
@@ -35,95 +44,122 @@ builder.Services.AddOpenTelemetry()
         metrics.AddPrometheusExporter();
     });
 
-builder.Services.AddHangfire(config => config.UseInMemoryStorage());
+// ======================
+// HANGFIRE
+// ======================
+builder.Services.AddHangfire(x => x.UseInMemoryStorage());
 builder.Services.AddHangfireServer();
+
+// ======================
+// APPLICATION SERVICES
+// ======================
 builder.Services.AddScoped<AppointmentIngestionService>();
 builder.Services.AddScoped<NotificationDispatchService>();
 
-builder.Services.AddScoped<CommunicationModule.Core.Interfaces.IEventPublisher, CommunicationModule.Infrastructure.Services.EventPublisher>();
+// ======================
+// 🔥 PROVIDERS (CORRECT FIX)
+// ======================
 
+// HttpClients (BELANGRIJK: fakecomworld docker base)
+builder.Services.AddHttpClient<SwiftSendProvider>(c =>
+{
+    c.BaseAddress = new Uri("http://localhost:1337");
+});
+
+builder.Services.AddHttpClient<LegacyLinkProvider>(c =>
+{
+    c.BaseAddress = new Uri("http://localhost:1337");
+});
+
+builder.Services.AddHttpClient<AsyncFlowProvider>(c =>
+{
+    c.BaseAddress = new Uri("http://localhost:1337");
+});
+
+builder.Services.AddHttpClient<SecurePostProvider>(c =>
+{
+    c.BaseAddress = new Uri("http://localhost:1337");
+});
+
+// 👉 DIT IS DE CRUCIALE FIX (IMessagingProvider REGISTRY)
+builder.Services.AddScoped<IMessagingProvider>(sp =>
+    sp.GetRequiredService<SwiftSendProvider>());
+
+builder.Services.AddScoped<IMessagingProvider>(sp =>
+    sp.GetRequiredService<LegacyLinkProvider>());
+
+builder.Services.AddScoped<IMessagingProvider>(sp =>
+    sp.GetRequiredService<AsyncFlowProvider>());
+
+builder.Services.AddScoped<IMessagingProvider>(sp =>
+    sp.GetRequiredService<SecurePostProvider>());
+
+// ======================
+// DB
+// ======================
 var conn = DatabaseConnectionResolver.ResolveConnectionString(builder.Configuration);
 var serverVersion = DatabaseConnectionResolver.GetServerVersion();
-builder.Services.AddDbContext<CommunicationDbContext>(opts =>
-    opts.UseMySql(conn, serverVersion, mySqlOptions =>
-        mySqlOptions.MigrationsHistoryTable("__efmigrationshistory")));
 
+builder.Services.AddDbContext<CommunicationDbContext>(opts =>
+    opts.UseMySql(conn, serverVersion, o =>
+        o.MigrationsHistoryTable("__efmigrationshistory")));
+
+// ======================
+// KESTREL
+// ======================
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ConfigureHttpsDefaults(httpsOptions =>
+    options.ConfigureHttpsDefaults(h =>
     {
-        httpsOptions.SslProtocols = SslProtocols.Tls13;
+        h.SslProtocols = SslProtocols.Tls13;
     });
 });
 
 var app = builder.Build();
 
-
+// ======================
+// PIPELINE
+// ======================
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseHangfireDashboard("/hangfire");
 }
 
 app.UseHttpsRedirection();
-
-// API key controle 
 app.UseMiddleware<ApiKeyMiddleware>();
 
-app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken cancellationToken) =>
-{
-    try
-    {
-        var canConnect = await db.Database.CanConnectAsync(cancellationToken);
-        var pendingMigrations = canConnect
-            ? await db.Database.GetPendingMigrationsAsync(cancellationToken)
-            : Array.Empty<string>();
-
-        return Results.Ok(new { canConnect, pendingMigrations = pendingMigrations.ToArray() });
-    }
-    catch (Exception ex)
-    {
-        return Results.Problem(
-            title: "Database check failed",
-            detail: ex.Message,
-            statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-});
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
-
+// ======================
+// ENDPOINTS
+// ======================
 app.MapDashboardEndpoints();
 app.MapOrganisationEndpoints();
 app.MapOpenMRSInstanceEndpoints();
 app.MapFhirEndpoints();
 app.MapHl7Endpoints();
-app.MapGet("/metrics/business", () => Results.Text(BusinessMetrics.GetPrometheusText(), "text/plain; version=0.0.4; charset=utf-8"));
+app.MapProviderEndpoints();
+
+// test endpoint
+app.MapPost("/test/dispatch/{jobId}", async (
+    Guid jobId,
+    NotificationDispatchService service,
+    CancellationToken ct) =>
+{
+    await service.DispatchAsync(jobId, ct);
+    return Results.Ok(new { jobId });
+});
+
+// db check
+app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken ct) =>
+{
+    return Results.Ok(new { canConnect = await db.Database.CanConnectAsync(ct) });
+});
+
+// metrics
+app.MapGet("/metrics/business",
+    () => Results.Text(BusinessMetrics.GetPrometheusText(),
+    "text/plain; version=0.0.4; charset=utf-8"));
+
 app.MapPrometheusScrapingEndpoint();
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseHangfireDashboard("/hangfire");
-}
-
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
