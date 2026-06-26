@@ -142,9 +142,9 @@ public class NotificationDispatchAndEncryptionTests
 
         await dispatcher.DispatchAsync(job.Id, CancellationToken.None);
 
-        var afterFirstAttempt = await db.NotificationJobs.SingleAsync(x => x.Id == job.Id);
-        afterFirstAttempt.Status.Should().Be(NotificationJobStatus.Failed);
-        afterFirstAttempt.RetryCount.Should().Be(1);
+        var afterFirstAttempt = await db.NotificationJobs.SingleAsync(x => x.Id == job.Id); afterFirstAttempt.Status.Should().Be(NotificationJobStatus.Pending); 
+        afterFirstAttempt.RetryCount.Should().Be(1); 
+        afterFirstAttempt.ScheduledFor.Should().NotBeNull();
 
         await dispatcher.DispatchAsync(job.Id, CancellationToken.None);
 
