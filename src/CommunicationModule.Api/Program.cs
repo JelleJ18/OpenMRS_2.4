@@ -175,8 +175,12 @@ app.Use(async (context, next) =>
 
     await next();
 });
-app.UseMiddleware<ApiKeyMiddleware>();
-
+app.UseWhen(context =>
+    !context.Request.Path.StartsWithSegments("/api/dashboard"),
+    appBuilder =>
+    {
+        appBuilder.UseMiddleware<ApiKeyMiddleware>();
+    });
 // ======================
 // ENDPOINTS
 // ======================
