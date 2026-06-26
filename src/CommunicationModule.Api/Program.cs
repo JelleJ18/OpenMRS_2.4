@@ -11,8 +11,10 @@ using CommunicationModule.Infrastructure.Providers.SecurePost;
 using Hangfire;
 using Hangfire.InMemory;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
 using OpenTelemetry.Metrics;
 using System.Security.Authentication;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -55,6 +57,25 @@ builder.Services.AddHangfireServer();
 // ======================
 builder.Services.AddScoped<AppointmentIngestionService>();
 builder.Services.AddScoped<NotificationDispatchService>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    {
+        var key = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            key,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
+});
 
 // ======================
 // 🔥 PROVIDERS (CORRECT FIX)
@@ -125,8 +146,35 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
     app.UseHangfireDashboard("/hangfire");
 }
+else
+{
+    app.UseHsts();
+    app.UseExceptionHandler(errorApp =>
+    {
+        errorApp.Run(async context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/json";
+
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "An unexpected error occurred."
+            });
+        });
+    });
+}
 
 app.UseHttpsRedirection();
+app.UseRateLimiter();
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+
+    await next();
+});
 app.UseMiddleware<ApiKeyMiddleware>();
 
 // ======================
@@ -140,20 +188,22 @@ app.MapHl7Endpoints();
 app.MapProviderEndpoints();
 
 // test endpoint
-app.MapPost("/test/dispatch/{jobId}", async (
-    Guid jobId,
-    NotificationDispatchService service,
-    CancellationToken ct) =>
+if (app.Environment.IsDevelopment())
 {
-    await service.DispatchAsync(jobId, ct);
-    return Results.Ok(new { jobId });
-});
+    app.MapPost("/test/dispatch/{jobId}", async (
+        Guid jobId,
+        NotificationDispatchService service,
+        CancellationToken ct) =>
+    {
+        await service.DispatchAsync(jobId, ct);
+        return Results.Ok(new { jobId });
+    });
 
-// db check
-app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken ct) =>
-{
-    return Results.Ok(new { canConnect = await db.Database.CanConnectAsync(ct) });
-});
+    app.MapGet("/db-check", async (CommunicationDbContext db, CancellationToken ct) =>
+    {
+        return Results.Ok(new { canConnect = await db.Database.CanConnectAsync(ct) });
+    });
+}
 
 // metrics
 app.MapGet("/metrics/business",
