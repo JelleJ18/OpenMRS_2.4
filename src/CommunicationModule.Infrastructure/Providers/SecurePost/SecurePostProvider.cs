@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using CommunicationModule.Core.DTOs;
 using CommunicationModule.Core.Interfaces;
@@ -9,9 +10,9 @@ public class SecurePostProvider : IMessagingProvider
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<SecurePostProvider> _logger;
-    
+
     private string? _cachedToken;
-    private DateTime _tokenExpiry = DateTime.MinValue;
+    private DateTime _expiresAt = DateTime.MinValue;
 
     public string ProviderName => "SecurePost";
 
@@ -21,83 +22,104 @@ public class SecurePostProvider : IMessagingProvider
         _logger = logger;
     }
 
-    private async Task<string?> GetTokenAsync(CancellationToken cancellationToken)
+    private async Task<string?> GetTokenAsync(CancellationToken ct)
     {
-        if (_cachedToken != null && DateTime.UtcNow < _tokenExpiry)
+        if (_cachedToken != null && DateTime.UtcNow < _expiresAt)
             return _cachedToken;
 
-        var response = await _httpClient.PostAsJsonAsync("securepost/auth", new
-        {
-            clientId = _httpClient.DefaultRequestHeaders.GetValues("X-CLIENT-ID").First(),
-            clientSecret = _httpClient.DefaultRequestHeaders.GetValues("X-CLIENT-SECRET").First()
-        }, cancellationToken);
+        _httpClient.DefaultRequestHeaders.Clear();
 
-        if (!response.IsSuccessStatusCode) return null;
+        _httpClient.DefaultRequestHeaders.Add(
+            "X-STUDENT-GROUP",
+            "group-1");
 
-        var result = await response.Content.ReadFromJsonAsync<SecurePostTokenResponse>(
-            cancellationToken: cancellationToken);
+        var response = await _httpClient.PostAsJsonAsync(
+            "/securepost/auth",
+            new
+            {
+                clientId = "securepost-client-id",
+                clientSecret = "securepost-secret-key"
+            },
+            ct);
 
-        _cachedToken = result?.AccessToken;
-        _tokenExpiry = DateTime.UtcNow.AddSeconds((result?.ExpiresIn ?? 180) - 30); // 30s buffer
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        var token = await response.Content.ReadFromJsonAsync<SecurePostTokenResponse>(
+            cancellationToken: ct);
+
+        if (token == null)
+            return null;
+
+        _cachedToken = token.AccessToken;
+        _expiresAt = DateTime.UtcNow.AddSeconds(token.ExpiresIn - 30);
 
         return _cachedToken;
     }
 
     public async Task<SendResult> SendAsync(
         NotificationMessage message,
-        CancellationToken cancellationToken = default)
+        CancellationToken ct = default)
     {
         try
         {
-            var token = await GetTokenAsync(cancellationToken);
+            var token = await GetTokenAsync(ct);
+
             if (token == null)
             {
                 return new SendResult
                 {
                     Success = false,
-                    ProviderMessageId = ProviderName,
-                    ErrorMessage = "Failed to obtain access token"
+                    ErrorMessage = "Could not obtain JWT token."
                 };
             }
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "securepost/message");
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-            request.Content = JsonContent.Create(new
-            {
-                format = "SMS",
-                recipient = message.PhoneNumber,
-                body = message.MessageBody,
-                subject = "Notification"
-            });
+            _httpClient.DefaultRequestHeaders.Clear();
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", token);
+
+            _httpClient.DefaultRequestHeaders.Add(
+                "X-STUDENT-GROUP",
+                "group-1");
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/securepost/message",
+                new
+                {
+                    format = "SMS",
+                    recipient = message.PhoneNumber,
+                    body = message.MessageBody,
+                    subject = "Reminder"
+                },
+                ct);
+
             var result = await response.Content.ReadFromJsonAsync<SecurePostMessageResponse>(
-                cancellationToken: cancellationToken);
+                cancellationToken: ct);
 
             if (response.IsSuccessStatusCode && result?.Delivered == true)
             {
                 return new SendResult
                 {
                     Success = true,
-                    ProviderMessageId = result.TrackingId ?? ProviderName
+                    ProviderMessageId = result.TrackingId
                 };
             }
 
-            _logger.LogWarning("SecurePost failed: {Error}", result?.ErrorMessage);
             return new SendResult
             {
                 Success = false,
-                ProviderMessageId = ProviderName,
-                ErrorMessage = result?.ErrorMessage
+                ProviderMessageId = result?.TrackingId,
+                ErrorMessage = result?.ErrorMessage ?? $"HTTP {(int)response.StatusCode}"
             };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error sending message via SecurePost");
+            _logger.LogError(ex, "SecurePost error");
+
             return new SendResult
             {
                 Success = false,
-                ProviderMessageId = ProviderName,
                 ErrorMessage = ex.Message
             };
         }
@@ -107,7 +129,9 @@ public class SecurePostProvider : IMessagingProvider
 file class SecurePostTokenResponse
 {
     public string? AccessToken { get; set; }
+    public string? TokenType { get; set; }
     public int ExpiresIn { get; set; }
+    public DateTime IssuedAt { get; set; }
 }
 
 file class SecurePostMessageResponse
@@ -115,4 +139,5 @@ file class SecurePostMessageResponse
     public bool Delivered { get; set; }
     public string? TrackingId { get; set; }
     public string? ErrorMessage { get; set; }
+    public DateTime? DeliveryTimestamp { get; set; }
 }

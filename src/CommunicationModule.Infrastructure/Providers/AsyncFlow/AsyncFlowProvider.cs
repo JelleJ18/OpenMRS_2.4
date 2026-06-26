@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using CommunicationModule.Core.DTOs;
 using CommunicationModule.Core.Interfaces;
@@ -20,54 +21,58 @@ public class AsyncFlowProvider : IMessagingProvider
 
     public async Task<SendResult> SendAsync(
         NotificationMessage message,
-        CancellationToken cancellationToken = default)
+        CancellationToken ct = default)
     {
         try
         {
-            // Submit het bericht
-            var response = await _httpClient.PostAsJsonAsync("asyncflow", new
-            {
-                destination = message.PhoneNumber,
-                content = message.MessageBody,
-                priority = "normal"
-            }, cancellationToken);
+            _httpClient.DefaultRequestHeaders.Clear();
 
-            if (!response.IsSuccessStatusCode)
+            _httpClient.DefaultRequestHeaders.Add(
+                "X-API-KEY",
+                "asyncflow-api-key"); // later uit ProviderSubscription halen
+
+            _httpClient.DefaultRequestHeaders.Add(
+                "X-STUDENT-GROUP",
+                "group-1");
+
+            _httpClient.DefaultRequestHeaders.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var response = await _httpClient.PostAsJsonAsync(
+                "/asyncflow",
+                new
+                {
+                    destination = message.PhoneNumber,
+                    content = message.MessageBody,
+                    priority = "normal"
+                },
+                ct);
+
+            var submit = await response.Content.ReadFromJsonAsync<AsyncFlowSubmitResponse>(
+                cancellationToken: ct);
+
+            if (!response.IsSuccessStatusCode || submit?.Accepted != true)
             {
                 return new SendResult
                 {
                     Success = false,
-                    ProviderMessageId = ProviderName,
                     ErrorMessage = $"HTTP {(int)response.StatusCode}"
                 };
             }
 
-            var submitted = await response.Content.ReadFromJsonAsync<AsyncFlowSubmitResponse>(
-                cancellationToken: cancellationToken);
+            _logger.LogInformation(
+                "AsyncFlow queued message {TrackingId}",
+                submit.TrackingId);
 
-            if (submitted?.TrackingId == null)
-            {
-                return new SendResult
-                {
-                    Success = false,
-                    ProviderMessageId = ProviderName,
-                    ErrorMessage = "No tracking ID received"
-                };
-            }
-
-            _logger.LogInformation("AsyncFlow message queued with trackingId {TrackingId}",
-                submitted.TrackingId);
-
-            // Poll totdat Completed of Failed
-            return await PollStatusAsync(submitted.TrackingId, cancellationToken);
+            return await PollStatusAsync(submit.TrackingId!, ct);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error sending message via AsyncFlow");
+            _logger.LogError(ex, "AsyncFlow error");
+
             return new SendResult
             {
                 Success = false,
-                ProviderMessageId = ProviderName,
                 ErrorMessage = ex.Message
             };
         }
@@ -75,23 +80,24 @@ public class AsyncFlowProvider : IMessagingProvider
 
     private async Task<SendResult> PollStatusAsync(
         string trackingId,
-        CancellationToken cancellationToken)
+        CancellationToken ct)
     {
-        var maxAttempts = 20;
-        var delay = TimeSpan.FromSeconds(3);
-
-        for (int i = 0; i < maxAttempts; i++)
+        for (int i = 0; i < 20; i++)
         {
-            await Task.Delay(delay, cancellationToken);
+            await Task.Delay(3000, ct);
 
-            var statusResponse = await _httpClient.GetFromJsonAsync<AsyncFlowStatusResponse>(
-                $"asyncflow/{trackingId}",
-                cancellationToken);
+            var status = await _httpClient.GetFromJsonAsync<AsyncFlowStatusResponse>(
+                $"/asyncflow/{trackingId}",
+                ct);
 
-            _logger.LogInformation("AsyncFlow status for {TrackingId}: {Status}",
-                trackingId, statusResponse?.Status);
+            if (status == null)
+                continue;
 
-            switch (statusResponse?.Status)
+            _logger.LogInformation(
+                "AsyncFlow status: {Status}",
+                status.Status);
+
+            switch (status.Status)
             {
                 case "Completed":
                     return new SendResult
@@ -99,22 +105,24 @@ public class AsyncFlowProvider : IMessagingProvider
                         Success = true,
                         ProviderMessageId = trackingId
                     };
+
                 case "Failed":
                     return new SendResult
                     {
                         Success = false,
                         ProviderMessageId = trackingId,
-                        ErrorMessage = statusResponse.ErrorDetails ?? "Processing failed"
+                        ErrorMessage = status.ErrorDetails
                     };
             }
-            // Queued of Processing, blijf pollen
+
+            // Queued / Processing -> opnieuw pollen
         }
 
         return new SendResult
         {
             Success = false,
             ProviderMessageId = trackingId,
-            ErrorMessage = "Timeout waiting for AsyncFlow to process message"
+            ErrorMessage = "Timeout waiting for AsyncFlow."
         };
     }
 }
@@ -123,11 +131,15 @@ file class AsyncFlowSubmitResponse
 {
     public bool Accepted { get; set; }
     public string? TrackingId { get; set; }
+    public string? Message { get; set; }
+    public DateTime SubmittedAt { get; set; }
 }
 
 file class AsyncFlowStatusResponse
 {
     public string? TrackingId { get; set; }
     public string? Status { get; set; }
+    public DateTime? SubmittedAt { get; set; }
+    public DateTime? ProcessedAt { get; set; }
     public string? ErrorDetails { get; set; }
 }
