@@ -4,14 +4,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using CommunicationModule.Core.DTOs;
 using CommunicationModule.Core.Enums;
-using CommunicationModule.Core.Events;
 using CommunicationModule.Core.Interfaces;
 using CommunicationModule.Core.Models;
 using CommunicationModule.Infrastructure.Data;
 using CommunicationModule.Infrastructure.Services;
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using System.Diagnostics;
 
 namespace CommunicationModule.Api.Services;
 
@@ -20,28 +19,26 @@ public class NotificationDispatchService
     private readonly CommunicationDbContext _db;
     private readonly AesEncryptionService _encryption;
     private readonly IEnumerable<IMessagingProvider> _providers;
-    private readonly IEventPublisher _events;
     private readonly ILogger<NotificationDispatchService> _logger;
+    private readonly IBackgroundJobClient _backgroundJobs;
 
     public NotificationDispatchService(
         CommunicationDbContext db,
         AesEncryptionService encryption,
         IEnumerable<IMessagingProvider> providers,
-        IEventPublisher events,
+        IBackgroundJobClient backgroundJobs,
         ILogger<NotificationDispatchService> logger)
     {
         _db = db;
         _encryption = encryption;
         _providers = providers;
-        _events = events;
+        _backgroundJobs = backgroundJobs;
         _logger = logger;
     }
 
     public async Task DispatchAsync(Guid notificationJobId, CancellationToken ct)
     {
-        var dispatchStart = Stopwatch.GetTimestamp();
-
-        _logger.LogInformation("Starting dispatch for job {JobId}", notificationJobId);
+        _logger.LogInformation("Dispatch started for Job {JobId}", notificationJobId);
 
         var job = await _db.NotificationJobs
             .Include(j => j.Appointment)
@@ -49,98 +46,94 @@ public class NotificationDispatchService
 
         if (job is null)
         {
-            _logger.LogWarning("NotificationJob {Id} not found.", notificationJobId);
+            _logger.LogWarning("Job not found {JobId}", notificationJobId);
             return;
         }
 
-        _logger.LogInformation("Job loaded. Status={Status}", job.Status);
-
-        // skip check
-        if (job.Appointment.AppointmentDateTime <= DateTime.UtcNow)
-        {
-            var old = job.Status;
-            job.Status = NotificationJobStatus.Skipped;
-
-            await WriteLogAsync(job, "system", false, null, "Appointment already started", ct);
-            await _db.SaveChangesAsync(ct);
-
-            _logger.LogInformation("Job skipped (appointment already started)");
-
+        if (job.Status == NotificationJobStatus.Sent ||
+            job.Status == NotificationJobStatus.Cancelled)
             return;
-        }
 
-        var providerSubscription = await _db.ProviderSubscriptions
-            .Where(p => p.OrganisationId == job.Appointment.OrganisationId)
-            .OrderByDescending(p => p.IsActive)
-            .FirstOrDefaultAsync(ct);
-
-        if (providerSubscription is null)
-        {
-            job.Status = NotificationJobStatus.Failed;
-            await WriteLogAsync(job, "unconfigured", false, null, "No provider configured", ct);
-            await _db.SaveChangesAsync(ct);
-            return;
-        }
-
-        if (!providerSubscription.IsActive)
-        {
-            job.Status = NotificationJobStatus.Failed;
-            await WriteLogAsync(job, providerSubscription.ProviderName, false, null, "Provider inactive", ct);
-            await _db.SaveChangesAsync(ct);
-            return;
-        }
-
-        var provider = _providers.FirstOrDefault(p =>
-            p.ProviderName.Equals(providerSubscription.ProviderName, StringComparison.OrdinalIgnoreCase));
-
-        if (provider is null)
-        {
-            job.Status = NotificationJobStatus.Failed;
-            await WriteLogAsync(job, providerSubscription.ProviderName, false, null, "Provider not registered", ct);
-            await _db.SaveChangesAsync(ct);
-            return;
-        }
-
-        string phoneNumber;
         try
         {
-            phoneNumber = _encryption.Decrypt(job.Appointment.EncryptedPatientPhone);
+            job.Status = NotificationJobStatus.Pending;
+            await _db.SaveChangesAsync(ct);
+
+            var provider = _providers.FirstOrDefault(p =>
+                string.Equals(p.ProviderName, "SwiftSend", StringComparison.OrdinalIgnoreCase));
+
+            var phoneNumber = _encryption.Decrypt(job.Appointment.EncryptedPatientPhone);
+
+            var message = new NotificationMessage
+            {
+                NotificationJobId = job.Id,
+                PhoneNumber = phoneNumber,
+                MessageBody = BuildMessage(job)
+            };
+
+            var result = await provider.SendAsync(message, ct);
+
+            // =========================
+            // SUCCESS
+            // =========================
+            if (result.Success)
+            {
+                job.Status = NotificationJobStatus.Sent;
+                job.SentAt = DateTime.UtcNow;
+
+                await WriteLogAsync(job, provider.ProviderName, true,
+                    result.ProviderMessageId, null, ct);
+
+                await _db.SaveChangesAsync(ct);
+
+                _logger.LogInformation("Job sent {JobId}", job.Id);
+                return;
+            }
+
+            // =========================
+            // FAILURE → RETRY FLOW
+            // =========================
+            await HandleRetry(job, result.ErrorMessage ?? "Send failed", ct);
         }
         catch (Exception ex)
         {
+            await HandleRetry(job, ex.Message, ct);
+            _logger.LogError(ex, "Unexpected error {JobId}", job.Id);
+        }
+    }
+
+    private async Task HandleRetry(NotificationJob job, string error, CancellationToken ct)
+    {
+        job.RetryCount++;
+
+        await WriteLogAsync(job, "system", false, null, error, ct);
+
+        if (job.RetryCount >= 3)
+        {
             job.Status = NotificationJobStatus.Failed;
-            await WriteLogAsync(job, providerSubscription.ProviderName, false, null, ex.Message, ct);
             await _db.SaveChangesAsync(ct);
+
+            _logger.LogWarning("Job failed permanently {JobId}", job.Id);
             return;
         }
 
-        var message = new NotificationMessage
-        {
-            NotificationJobId = job.Id,
-            PhoneNumber = phoneNumber,
-            MessageBody = BuildMessage(job)
-        };
+        var delayMinutes = Math.Pow(2, job.RetryCount);
 
-        var result = await provider.SendAsync(message, ct);
+        job.Status = NotificationJobStatus.Pending;
+        job.ScheduledFor = DateTime.UtcNow.AddMinutes(delayMinutes);
 
-        if (!result.Success)
-        {
-            job.Status = NotificationJobStatus.Failed;
-            job.RetryCount++;
-
-            await WriteLogAsync(job, providerSubscription.ProviderName, false, result.ProviderMessageId, result.ErrorMessage, ct);
-            await _db.SaveChangesAsync(ct);
-
-            return;
-        }
-
-        job.Status = NotificationJobStatus.Sent;
-        job.SentAt = DateTime.UtcNow;
-
-        await WriteLogAsync(job, providerSubscription.ProviderName, true, result.ProviderMessageId, null, ct);
         await _db.SaveChangesAsync(ct);
 
-        _logger.LogInformation("Job successfully sent");
+        _logger.LogWarning(
+            "Retry scheduled in {Minutes} min (attempt {Retry}) Job {JobId}",
+            delayMinutes,
+            job.RetryCount,
+            job.Id);
+
+        // 🔥 THIS IS THE MISSING PIECE
+        _backgroundJobs.Schedule(
+            () => DispatchAsync(job.Id, CancellationToken.None),
+            TimeSpan.FromMinutes(delayMinutes));
     }
 
     private static string BuildMessage(NotificationJob job)
@@ -154,7 +147,7 @@ public class NotificationDispatchService
         string? errorMessage,
         CancellationToken ct)
     {
-        var log = new MessageLog
+        _db.MessageLogs.Add(new MessageLog
         {
             Id = Guid.NewGuid(),
             NotificationJobId = job.Id,
@@ -164,15 +157,8 @@ public class NotificationDispatchService
             ProviderMessageId = providerMessageId,
             ErrorMessage = errorMessage,
             LoggedAt = DateTime.UtcNow
-        };
+        });
 
-        _db.MessageLogs.Add(log);
-
-        // IMPORTANT: één SaveChanges per flow (niet per log)
         await _db.SaveChangesAsync(ct);
-
-        _logger.LogInformation(
-            "MessageLog written: Job={JobId}, Success={Success}",
-            job.Id, success);
     }
 }

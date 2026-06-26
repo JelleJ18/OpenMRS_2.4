@@ -9,6 +9,7 @@ using Hl7.Fhir.Model;
 using Hl7.Fhir.Serialization;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
+using Task = System.Threading.Tasks.Task;
 
 namespace CommunicationModule.Api.Services;
 
@@ -36,15 +37,13 @@ public class AppointmentIngestionService
         Guid organisationId,
         CancellationToken ct)
     {
-        var ingestStart = Stopwatch.GetTimestamp();
+        var deserializer = new FhirJsonDeserializer(
+            new DeserializerSettings { AcceptUnknownMembers = false });
 
         FhirAppointment fhir;
 
         try
         {
-            var deserializer = new FhirJsonDeserializer(
-                new DeserializerSettings { AcceptUnknownMembers = false });
-
             fhir = deserializer.Deserialize<FhirAppointment>(fhirJson);
         }
         catch (Exception ex)
@@ -70,6 +69,7 @@ public class AppointmentIngestionService
 
         var encryptedPhone = _encryption.Encrypt(patientPhone);
 
+        // 🔥 LOAD WITH TRACKING (IMPORTANT FOR CONSISTENCY)
         var appointment = await _db.Appointments
             .Include(a => a.NotificationJobs)
             .FirstOrDefaultAsync(
@@ -100,48 +100,21 @@ public class AppointmentIngestionService
         await _db.SaveChangesAsync(ct);
 
         // =========================
-        // Jobs scheduling (only for scheduled)
+        // IDEMPOTENT SCHEDULING
         // =========================
         if (status == AppointmentStatus.Scheduled)
         {
-            var now = DateTime.UtcNow;
+            await ScheduleIfNotExistsAsync(
+                appointment,
+                NotificationJobType.TwentyFourHour,
+                appointmentTime.AddHours(-24),
+                ct);
 
-            var t24 = appointmentTime.AddHours(-24);
-            var t1 = appointmentTime.AddHours(-1);
-
-            if (t24 > now)
-            {
-                var job = new NotificationJob
-                {
-                    Id = Guid.NewGuid(),
-                    AppointmentId = appointment.Id,
-                    Type = NotificationJobType.TwentyFourHour,
-                    ScheduledFor = t24
-                };
-
-                _db.NotificationJobs.Add(job);
-
-                _jobs.Schedule<NotificationDispatchService>(
-                    s => s.DispatchAsync(job.Id, CancellationToken.None),
-                    t24 - now);
-            }
-
-            if (t1 > now)
-            {
-                var job = new NotificationJob
-                {
-                    Id = Guid.NewGuid(),
-                    AppointmentId = appointment.Id,
-                    Type = NotificationJobType.OneHour,
-                    ScheduledFor = t1
-                };
-
-                _db.NotificationJobs.Add(job);
-
-                _jobs.Schedule<NotificationDispatchService>(
-                    s => s.DispatchAsync(job.Id, CancellationToken.None),
-                    t1 - now);
-            }
+            await ScheduleIfNotExistsAsync(
+                appointment,
+                NotificationJobType.OneHour,
+                appointmentTime.AddHours(-1),
+                ct);
 
             await _db.SaveChangesAsync(ct);
         }
@@ -154,11 +127,46 @@ public class AppointmentIngestionService
                 location),
             ct);
 
-        return IngestionResult.Ok(appointment.Id, scheduled: isNew);
+        return IngestionResult.Ok(appointment.Id, scheduled: true);
     }
 
+    private async Task ScheduleIfNotExistsAsync(
+    DomainAppointment appointment,
+    NotificationJobType type,
+    DateTime scheduledFor,
+    CancellationToken ct)
+{
+    if (scheduledFor <= DateTime.UtcNow)
+        return;
+
+    var exists = await _db.NotificationJobs.AnyAsync(j =>
+        j.AppointmentId == appointment.Id &&
+        j.Type == type,
+        ct);
+
+    if (exists)
+        return;
+
+    var job = new NotificationJob
+    {
+        Id = Guid.NewGuid(),
+        AppointmentId = appointment.Id,
+        Type = type,
+        ScheduledFor = scheduledFor,
+        Status = NotificationJobStatus.Pending
+    };
+
+    _db.NotificationJobs.Add(job);
+
+    _jobs.Schedule<NotificationDispatchService>(
+        s => s.DispatchAsync(job.Id, CancellationToken.None),
+        scheduledFor - DateTime.UtcNow);
+
+    await Task.CompletedTask; // 🔥 FIX COMPILER EDGE CASE
+}
+
     // =========================
-    // VALIDATION
+    // VALIDATION (UNCHANGED)
     // =========================
     private static string? ValidateAppointment(FhirAppointment fhir)
     {
@@ -198,9 +206,6 @@ public class AppointmentIngestionService
         return null;
     }
 
-    // =========================
-    // HELPERS
-    // =========================
     private static string ExtractLocation(FhirAppointment fhir)
         => fhir.Participant
             .FirstOrDefault(p => p.Actor?.Reference?.StartsWith("Location/") == true)
