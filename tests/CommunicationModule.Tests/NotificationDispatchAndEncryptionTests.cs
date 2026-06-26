@@ -154,15 +154,20 @@ public class NotificationDispatchAndEncryptionTests
     }
 
     private static NotificationDispatchService CreateDispatcher(
-        CommunicationDbContext db,
-        AesEncryptionService encryption,
-        IMessagingProvider provider)
-    {
-        var eventPublisher = new NoopEventPublisher();
-        var logger = Mock.Of<ILogger<NotificationDispatchService>>();
+    CommunicationDbContext db,
+    AesEncryptionService encryption,
+    IMessagingProvider provider)
+{
+    var backgroundJobs = Mock.Of<Hangfire.IBackgroundJobClient>();
+    var logger = Mock.Of<ILogger<NotificationDispatchService>>();
 
-        return new NotificationDispatchService(db, encryption, [provider], eventPublisher, logger);
-    }
+    return new NotificationDispatchService(
+        db,
+        encryption,
+        new[] { provider },
+        backgroundJobs,
+        logger);
+}
 
     private static CommunicationDbContext CreateDbContext()
     {

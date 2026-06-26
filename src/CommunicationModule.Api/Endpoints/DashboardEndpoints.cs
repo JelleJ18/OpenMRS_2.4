@@ -226,7 +226,7 @@ record NotificationJobItem(
     Guid AppointmentId,
     NotificationJobType Type,
     NotificationJobStatus Status,
-    DateTime ScheduledFor,
+    DateTime? ScheduledFor,
     int RetryCount,
     DateTime? SentAt);
 

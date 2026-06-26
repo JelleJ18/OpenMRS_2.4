@@ -24,16 +24,18 @@ public class DataRetentionService
         var cutoff = DateTime.UtcNow.AddDays(-14);
 
         var appointments = await _db.Appointments
+            .Include(a => a.NotificationJobs)
             .Where(a =>
-                a.NotificationJobs.Any(j =>
-                    j.Status == NotificationJobStatus.Sent &&
-                    j.SentAt <= cutoff))
+                a.AppointmentDateTime <= cutoff &&
+                a.NotificationJobs.Any(j => j.Status == NotificationJobStatus.Sent))
             .ToListAsync();
 
         foreach (var appointment in appointments)
         {
             appointment.EncryptedPatientPhone = null;
             appointment.FhirAppointmentId = null;
+            appointment.Location = null;
+            appointment.Instructions = null;
         }
 
         await _db.SaveChangesAsync();

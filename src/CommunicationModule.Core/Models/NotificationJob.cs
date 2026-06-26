@@ -12,7 +12,7 @@ public class NotificationJob
     public NotificationJobType Type { get; set; }
     public NotificationJobStatus Status { get; set; } = NotificationJobStatus.Pending;
 
-    public DateTime ScheduledFor { get; set; }
+    public DateTime? ScheduledFor { get; set; }
     public DateTime? SentAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

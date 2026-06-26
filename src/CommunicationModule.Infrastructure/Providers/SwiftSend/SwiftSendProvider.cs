@@ -10,6 +10,7 @@ public class SwiftSendProvider : IMessagingProvider
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<SwiftSendProvider> _logger;
+    private static readonly Random _random = new();
 
     public string ProviderName => "SwiftSend";
 
@@ -27,26 +28,51 @@ public class SwiftSendProvider : IMessagingProvider
         {
             _httpClient.DefaultRequestHeaders.Clear();
 
-            _httpClient.DefaultRequestHeaders.Add(
-                "X-API-KEY",
-                "your-api-key-here"); // of decrypt uit ProviderSubscription
-
-            _httpClient.DefaultRequestHeaders.Add(
-                "X-STUDENT-GROUP",
-                "group-1");
-
+            _httpClient.DefaultRequestHeaders.Add("X-API-KEY", "your-api-key-here");
+            _httpClient.DefaultRequestHeaders.Add("X-STUDENT-GROUP", "group-1");
             _httpClient.DefaultRequestHeaders.Accept.Add(
                 new MediaTypeWithQualityHeaderValue("application/json"));
+
+            // =========================
+            // 🔥 TEST FAILURE SIMULATIE
+            // =========================
+
+            var roll = _random.Next(1, 101);
+
+            // 30% failure
+            if (roll <= 30)
+            {
+                _logger.LogWarning("SwiftSend SIMULATED FAILURE (no HTTP call)");
+
+                return new SendResult
+                {
+                    Success = false,
+                    ErrorMessage = "Simulated SwiftSend failure"
+                };
+            }
+
+            // 10% fake HTTP 500
+            if (roll <= 40)
+            {
+                _logger.LogError("SwiftSend SIMULATED HTTP 500");
+
+                return new SendResult
+                {
+                    Success = false,
+                    ErrorMessage = "HTTP 500 simulated"
+                };
+            }
+
+            // =========================
+            // REAL CALL
+            // =========================
 
             var response = await _httpClient.PostAsJsonAsync(
                 "/swiftsend",
                 new
                 {
                     type = "SMS",
-                    recipients = new[]
-                    {
-                        message.PhoneNumber
-                    },
+                    recipients = new[] { message.PhoneNumber },
                     content = message.MessageBody
                 },
                 ct);
@@ -73,7 +99,7 @@ public class SwiftSendProvider : IMessagingProvider
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "SwiftSend error");
+            _logger.LogError(ex, "SwiftSend exception");
 
             return new SendResult
             {
